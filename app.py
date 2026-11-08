@@ -4,16 +4,17 @@ Fornece API RESTful para Lançamentos, Dashboard Anual, Orçamento vs Realizado,
 Investimentos, Dívidas, Metas e Reserva de Emergência, com mecanismos de Poka-Yoke.
 """
 import os
+# type: ignore
 import sqlite3
-import json
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "financas.db")
+DB_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), "financas.db")
 
 app = FastAPI(title="Controle Financeiro Pessoal API", version="1.0.0")
 
@@ -40,7 +41,8 @@ class LancamentoInput(BaseModel):
     tipo: str = Field(..., pattern="^(Receita|Despesa)$")
     categoria: str
     descricao: Optional[str] = ""
-    valor: float = Field(..., gt=0, description="O valor deve ser estritamente positivo")
+    valor: float = Field(..., gt=0,
+                         description="O valor deve ser estritamente positivo")
     forma_pgto: str = "PIX"
     observacao: Optional[str] = ""
 
@@ -87,9 +89,11 @@ class ReservaUpdate(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 def serve_frontend():
     """Serve a interface Single-Page Application (SPA) HTML."""
-    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+    html_path = os.path.join(os.path.dirname(
+        os.path.abspath(__file__)), "index.html")
     if not os.path.exists(html_path):
-        raise HTTPException(status_code=404, detail="Arquivo index.html não encontrado.")
+        raise HTTPException(
+            status_code=404, detail="Arquivo index.html não encontrado.")
     with open(html_path, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -98,28 +102,62 @@ def serve_frontend():
 def listar_categorias():
     """Retorna todas as categorias separadas por tipo e macro-categoria para alimentar dropdowns."""
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM categorias ORDER BY tipo DESC, nome ASC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM categorias ORDER BY tipo DESC, nome ASC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 @app.get("/api/lancamentos")
-def listar_lancamentos(ano: int = 2026, mes: Optional[int] = None, tipo: Optional[str] = None, busca: Optional[str] = None):
-    """Lista os lançamentos com suporte a filtros combinados de ano, mês, tipo e termo de busca."""
+def listar_lancamentos(
+    ano: int = 2026,
+    mes: Optional[int] = None,
+    tipo: Optional[str] = None,
+    busca: Optional[str] = None,
+    data_ini: Optional[str] = None,
+    data_fim: Optional[str] = None,
+    valor_min: Optional[float] = None,
+    valor_max: Optional[float] = None,
+    categoria: Optional[str] = None,
+    forma_pgto: Optional[str] = None
+):
+    """Lista os lançamentos com suporte a filtros combinados de ano, mês, tipo, etc."""
     conn = get_db_connection()
-    query = "SELECT * FROM lancamentos WHERE ano = ?"
-    params = [ano]
 
+    query = "SELECT * FROM lancamentos WHERE 1=1"
+    params = []
+
+    if ano:
+        query += " AND ano = ?"
+        params.append(ano)
     if mes:
         query += " AND mes = ?"
         params.append(mes)
     if tipo and tipo in ("Receita", "Despesa"):
         query += " AND tipo = ?"
         params.append(tipo)
+    if data_ini:
+        query += " AND data >= ?"
+        params.append(data_ini)
+    if data_fim:
+        query += " AND data <= ?"
+        params.append(data_fim)
+    if valor_min is not None:
+        query += " AND valor >= ?"
+        params.append(valor_min)
+    if valor_max is not None:
+        query += " AND valor <= ?"
+        params.append(valor_max)
+    if categoria:
+        query += " AND categoria = ?"
+        params.append(categoria)
+    if forma_pgto:
+        query += " AND forma_pgto = ?"
+        params.append(forma_pgto)
     if busca:
-        query += " AND (descricao LIKE ? OR categoria LIKE ? OR observacao LIKE ?)"
+        query += " AND (descricao LIKE ? OR observacao LIKE ?)"
         termo = f"%{busca}%"
-        params.extend([termo, termo, termo])
+        params.extend([termo, termo])
 
     query += " ORDER BY data DESC, id DESC"
     rows = conn.execute(query, params).fetchall()
@@ -136,7 +174,8 @@ def criar_lancamento(payload: LancamentoInput):
     try:
         dt = datetime.strptime(payload.data, "%Y-%m-%d")
     except ValueError:
-        raise HTTPException(status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
+        raise HTTPException(
+            status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
 
     mes = dt.month
     ano = dt.year
@@ -234,7 +273,8 @@ def obter_dashboard(ano: int = 2026):
         acum = round(acum + s_mes, 2)
         saldo_acumulado[m] = acum
         pct_poupado[m] = round((s_mes / rec) * 100, 2) if rec > 0 else 0.0
-        orcado_vs_real[m] = round(desp - orcado_mes[m], 2) if orcado_mes[m] > 0 or desp > 0 else 0.0
+        orcado_vs_real[m] = round(
+            desp - orcado_mes[m], 2) if orcado_mes[m] > 0 or desp > 0 else 0.0
 
     # 4. Resumo por Categoria (aba ⚙ Resumo / 📥 Receitas)
     rows_cat = conn.execute(
@@ -249,7 +289,8 @@ def obter_dashboard(ano: int = 2026):
         (ano,),
     ).fetchall()
 
-    todas_cats = conn.execute("SELECT nome, tipo, macro_categoria FROM categorias ORDER BY id ASC").fetchall()
+    todas_cats = conn.execute(
+        "SELECT nome, tipo, macro_categoria FROM categorias ORDER BY id ASC").fetchall()
     resumo_categorias = []
     mapa_cat = {}
     for c in todas_cats:
@@ -276,12 +317,16 @@ def obter_dashboard(ano: int = 2026):
             resumo_categorias.append(item)
             mapa_cat[nome_c] = item
         mapa_cat[nome_c]["meses"][r["mes"]] = round(r["total"], 2)
-        mapa_cat[nome_c]["total_ano"] = round(sum(mapa_cat[nome_c]["meses"].values()), 2)
+        mapa_cat[nome_c]["total_ano"] = round(
+            sum(mapa_cat[nome_c]["meses"].values()), 2)
 
     # 5. Totais de Carteira, Dívidas e Reserva
-    tot_inv = conn.execute("SELECT COALESCE(SUM(saldo_atual), 0) FROM investimentos").fetchone()[0]
-    tot_div = conn.execute("SELECT COALESCE(SUM(saldo_devedor), 0) FROM dividas").fetchone()[0]
-    res_cfg = conn.execute("SELECT * FROM reserva_config WHERE id = 1").fetchone()
+    tot_inv = conn.execute(
+        "SELECT COALESCE(SUM(saldo_atual), 0) FROM investimentos").fetchone()[0]
+    tot_div = conn.execute(
+        "SELECT COALESCE(SUM(saldo_devedor), 0) FROM dividas").fetchone()[0]
+    res_cfg = conn.execute(
+        "SELECT * FROM reserva_config WHERE id = 1").fetchone()
 
     conn.close()
 
@@ -323,8 +368,10 @@ def obter_orcamento(ano: int = 2026):
         "Lazer", "Vestuário", "Pessoal", "Financeiro", "Poupança/Investimentos", "Outros"
     ]
 
-    rows_orc = conn.execute("SELECT macro_categoria, mes, valor_orcado FROM orcamento WHERE ano = ?", (ano,)).fetchall()
-    orc_map = {(r["macro_categoria"], r["mes"]): round(r["valor_orcado"], 2) for r in rows_orc}
+    rows_orc = conn.execute(
+        "SELECT macro_categoria, mes, valor_orcado FROM orcamento WHERE ano = ?", (ano,)).fetchall()
+    orc_map = {(r["macro_categoria"], r["mes"]): round(
+        r["valor_orcado"], 2) for r in rows_orc}
 
     rows_real = conn.execute(
         """
@@ -336,7 +383,8 @@ def obter_orcamento(ano: int = 2026):
         """,
         (ano,),
     ).fetchall()
-    real_map = {(r["macro"], r["mes"]): round(r["total"], 2) for r in rows_real}
+    real_map = {(r["macro"], r["mes"]): round(r["total"], 2)
+                for r in rows_real}
 
     conn.close()
 
@@ -344,7 +392,8 @@ def obter_orcamento(ano: int = 2026):
     for mac in macros:
         orc_meses = {m: orc_map.get((mac, m), 0.0) for m in range(1, 13)}
         real_meses = {m: real_map.get((mac, m), 0.0) for m in range(1, 13)}
-        dif_meses = {m: round(real_meses[m] - orc_meses[m], 2) for m in range(1, 13)}
+        dif_meses = {m: round(real_meses[m] - orc_meses[m], 2)
+                     for m in range(1, 13)}
         tot_orc = round(sum(orc_meses.values()), 2)
         tot_real = round(sum(real_meses.values()), 2)
         resultado.append({
@@ -370,7 +419,8 @@ def atualizar_orcamento(payload: OrcamentoInput):
         VALUES (?, ?, ?, ?)
         ON CONFLICT(macro_categoria, ano, mes) DO UPDATE SET valor_orcado = excluded.valor_orcado
         """,
-        (payload.macro_categoria, payload.ano, payload.mes, round(payload.valor_orcado, 2)),
+        (payload.macro_categoria, payload.ano,
+         payload.mes, round(payload.valor_orcado, 2)),
     )
     conn.commit()
     conn.close()
@@ -381,10 +431,14 @@ def atualizar_orcamento(payload: OrcamentoInput):
 def obter_planejamento(ano: int = 2026):
     """Retorna os dados consolidados de Investimentos, Dívidas, Metas e Reserva de Emergência."""
     conn = get_db_connection()
-    inv = [dict(r) for r in conn.execute("SELECT * FROM investimentos ORDER BY id ASC").fetchall()]
-    div = [dict(r) for r in conn.execute("SELECT * FROM dividas ORDER BY taxa_juros_mes DESC, id ASC").fetchall()]
-    metas = [dict(r) for r in conn.execute("SELECT * FROM metas ORDER BY id ASC").fetchall()]
-    res_cfg = dict(conn.execute("SELECT * FROM reserva_config WHERE id = 1").fetchone())
+    inv = [dict(r) for r in conn.execute(
+        "SELECT * FROM investimentos ORDER BY id ASC").fetchall()]
+    div = [dict(r) for r in conn.execute(
+        "SELECT * FROM dividas ORDER BY taxa_juros_mes DESC, id ASC").fetchall()]
+    metas = [dict(r) for r in conn.execute(
+        "SELECT * FROM metas ORDER BY id ASC").fetchall()]
+    res_cfg = dict(conn.execute(
+        "SELECT * FROM reserva_config WHERE id = 1").fetchone())
 
     # Calcula despesa mensal média automática dos meses com movimentação
     row_media = conn.execute(
@@ -421,7 +475,8 @@ def salvar_investimento(payload: InvestimentoUpdate):
     conn = get_db_connection()
     conn.execute(
         "UPDATE investimentos SET saldo_inicial = ?, saldo_atual = ?, rentabilidade_pct = ? WHERE id = ?",
-        (payload.saldo_inicial, payload.saldo_atual, payload.rentabilidade_pct, payload.id),
+        (payload.saldo_inicial, payload.saldo_atual,
+         payload.rentabilidade_pct, payload.id),
     )
     conn.commit()
     conn.close()
@@ -433,7 +488,8 @@ def salvar_divida(payload: DividaUpdate):
     conn = get_db_connection()
     conn.execute(
         "UPDATE dividas SET saldo_devedor = ?, taxa_juros_mes = ?, parcela_min = ?, parcelas_rest = ? WHERE id = ?",
-        (payload.saldo_devedor, payload.taxa_juros_mes, payload.parcela_min, payload.parcelas_rest, payload.id),
+        (payload.saldo_devedor, payload.taxa_juros_mes,
+         payload.parcela_min, payload.parcelas_rest, payload.id),
     )
     conn.commit()
     conn.close()
@@ -461,7 +517,8 @@ def salvar_reserva(payload: ReservaUpdate):
         SET despesa_media_manual = ?, usar_media_automatica = ?, meses_seguranca = ?, saldo_atual_reserva = ?
         WHERE id = 1
         """,
-        (payload.despesa_media_manual, payload.usar_media_automatica, payload.meses_seguranca, payload.saldo_atual_reserva),
+        (payload.despesa_media_manual, payload.usar_media_automatica,
+         payload.meses_seguranca, payload.saldo_atual_reserva),
     )
     conn.commit()
     conn.close()
