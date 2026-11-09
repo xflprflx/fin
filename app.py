@@ -217,6 +217,52 @@ def excluir_lancamento(lanc_id: int):
     return {"status": "deleted", "id": lanc_id}
 
 
+@app.put("/api/lancamentos/{lanc_id}")
+def atualizar_lancamento(lanc_id: int, payload: LancamentoInput):
+    """Atualiza um lançamento existente, recalculando competência, mês e ano."""
+    try:
+        dt = datetime.strptime(payload.data, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
+
+    mes = dt.month
+    ano = dt.year
+    competencia = f"{mes:02d}/{ano}"
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE lancamentos
+        SET data = ?, mes = ?, ano = ?, tipo = ?, categoria = ?, descricao = ?,
+            valor = ?, forma_pgto = ?, observacao = ?, competencia = ?
+        WHERE id = ?
+        """,
+        (
+            payload.data,
+            mes,
+            ano,
+            payload.tipo,
+            payload.categoria,
+            payload.descricao.strip() if payload.descricao else "",
+            round(payload.valor, 2),
+            payload.forma_pgto,
+            payload.observacao.strip() if payload.observacao else "",
+            competencia,
+            lanc_id,
+        ),
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        raise HTTPException(
+            status_code=404, detail="Lançamento não encontrado.")
+
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "id": lanc_id}
+
+
 @app.get("/api/dashboard")
 def obter_dashboard(ano: int = 2026):
     """

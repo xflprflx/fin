@@ -458,6 +458,60 @@
 
     </main>
 
+    <!-- Modal de Edição de Lançamento -->
+    <div id="modalEdicaoLancamento" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 w-full max-w-2xl shadow-2xl">
+            <div class="flex items-center justify-between mb-5">
+                <h2 class="text-base font-bold text-sky-400">✏️ Editar Lançamento</h2>
+                <button type="button" onclick="fecharModalEdicao()" class="text-slate-400 hover:text-white transition">✖</button>
+            </div>
+            <form id="formEdicaoLancamento" onsubmit="salvarEdicaoLancamento(event)" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <input type="hidden" id="editId">
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Data *</label>
+                    <input type="date" id="editData" required class="w-full rounded px-3 py-1.5 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
+                    <select id="editTipo" onchange="atualizarDropdownEdicaoCategoria()" class="w-full rounded px-3 py-1.5 text-sm font-semibold">
+                        <option value="Despesa">🔻 Despesa</option>
+                        <option value="Receita">🔺 Receita</option>
+                    </select>
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="block text-xs text-slate-400 mb-1">Categoria *</label>
+                    <select id="editCategoria" required class="w-full rounded px-3 py-1.5 text-sm"></select>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Descrição / Subcategoria *</label>
+                    <input type="text" id="editDescricao" required class="w-full rounded px-3 py-1.5 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Valor (R$) *</label>
+                    <input type="number" id="editValor" step="0.01" min="0.01" required class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Pgto / Conta</label>
+                    <select id="editFormaPgto" class="w-full rounded px-3 py-1.5 text-sm">
+                        <option value="PIX">PIX</option>
+                        <option value="Crédito">Crédito</option>
+                        <option value="Débito">Débito</option>
+                        <option value="Transferência">Transferência</option>
+                        <option value="Boleto">Boleto</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Banco / Obs</label>
+                    <input type="text" id="editObs" class="w-full rounded px-3 py-1.5 text-sm">
+                </div>
+                <div class="sm:col-span-2 flex justify-end gap-3 mt-2">
+                    <button type="button" onclick="fecharModalEdicao()" class="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
+                    <button type="submit" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-6 py-2 rounded-lg text-sm transition shadow">💾 Atualizar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         let categoriasCache = [];
         let dashboardCache = null;
@@ -560,6 +614,20 @@
                 opt.textContent = c.nome;
                 sel.appendChild(opt);
             });
+        }
+
+        function atualizarDropdownEdicaoCategoria() {
+            const tipo = document.getElementById('editTipo').value;
+            const sel = document.getElementById('editCategoria');
+            const valorAtual = sel.value; // Tenta preservar se existir
+            sel.innerHTML = '';
+            categoriasCache.filter(c => c.tipo === tipo).forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.nome;
+                opt.textContent = c.nome;
+                sel.appendChild(opt);
+            });
+            if(valorAtual) sel.value = valorAtual;
         }
 
         async function reloadAll() {
@@ -717,7 +785,15 @@
             carregarLancamentos();
         }
 
+        function limparIconesOrdenacao() {
+            document.querySelectorAll('th.sortable').forEach(el => {
+                el.classList.remove('asc', 'desc');
+                el.innerHTML = el.innerHTML.replace(/ ⬆️| ⬇️/g, '');
+            });
+        }
+
         async function carregarLancamentos() {
+            limparIconesOrdenacao();
             const ano = document.getElementById('globalAno').value;
             const mes = document.getElementById('filtroMes').value;
             const tipo = document.getElementById('filtroTipo').value;
@@ -753,6 +829,7 @@
                 const isRec = r.tipo === 'Receita';
                 const badgeCls = isRec ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300';
                 const valCls = isRec ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold';
+                const rowData = btoa(unescape(encodeURIComponent(JSON.stringify(r))));
 
                 return `<tr class="hover:bg-slate-800/50 transition">
                     <td class="font-mono text-xs text-slate-300">${r.data.split('-').reverse().join('/')}</td>
@@ -763,8 +840,9 @@
                     <td class="text-right font-mono ${valCls}">${fmtBRL(r.valor)}</td>
                     <td class="text-slate-300 text-xs">${r.forma_pgto}</td>
                     <td class="text-slate-400 text-xs">${r.observacao}</td>
-                    <td class="text-center">
-                        <button onclick="removerLancamento(${r.id})" class="text-slate-500 hover:text-rose-400 px-2 py-0.5 text-xs transition" title="Excluir">🗑️</button>
+                    <td class="text-center whitespace-nowrap">
+                        <button onclick="abrirModalEdicao('${rowData}')" class="text-slate-500 hover:text-sky-400 px-1 py-0.5 text-xs transition" title="Editar">✏️</button>
+                        <button onclick="removerLancamento(${r.id})" class="text-slate-500 hover:text-rose-400 px-1 py-0.5 text-xs transition" title="Excluir">🗑️</button>
                     </td>
                 </tr>`;
             }).join('');
@@ -799,6 +877,54 @@
             } else {
                 const err = await res.json();
                 alert('Erro ao salvar: ' + (err.detail || 'Verifique os campos.'));
+            }
+        }
+
+        function abrirModalEdicao(dataStr) {
+            const data = JSON.parse(decodeURIComponent(escape(atob(dataStr))));
+            document.getElementById('editId').value = data.id;
+            document.getElementById('editData').value = data.data;
+            document.getElementById('editTipo').value = data.tipo;
+            document.getElementById('editDescricao').value = data.descricao;
+            document.getElementById('editValor').value = data.valor;
+            document.getElementById('editFormaPgto').value = data.forma_pgto;
+            document.getElementById('editObs').value = data.observacao;
+
+            atualizarDropdownEdicaoCategoria();
+            document.getElementById('editCategoria').value = data.categoria;
+
+            document.getElementById('modalEdicaoLancamento').classList.remove('hidden');
+        }
+
+        function fecharModalEdicao() {
+            document.getElementById('modalEdicaoLancamento').classList.add('hidden');
+        }
+
+        async function salvarEdicaoLancamento(e) {
+            e.preventDefault();
+            const id = document.getElementById('editId').value;
+            const payload = {
+                data: document.getElementById('editData').value,
+                tipo: document.getElementById('editTipo').value,
+                categoria: document.getElementById('editCategoria').value,
+                descricao: document.getElementById('editDescricao').value,
+                valor: parseFloat(document.getElementById('editValor').value),
+                forma_pgto: document.getElementById('editFormaPgto').value,
+                observacao: document.getElementById('editObs').value
+            };
+
+            const res = await fetch(`/api/lancamentos/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                fecharModalEdicao();
+                await reloadAll();
+            } else {
+                const err = await res.json();
+                alert('Erro ao atualizar: ' + (err.detail || 'Verifique os campos.'));
             }
         }
 
