@@ -6,7 +6,9 @@ Investimentos, Dívidas, Metas e Reserva de Emergência, com mecanismos de Poka-
 import os
 # type: ignore
 import sqlite3
+import uuid
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -45,6 +47,8 @@ class LancamentoInput(BaseModel):
                          description="O valor deve ser estritamente positivo")
     forma_pgto: str = "PIX"
     observacao: Optional[str] = ""
+    frequencia_recorrencia: Optional[str] = None
+    quantidade_recorrencia: Optional[int] = 1
 
 
 class OrcamentoInput(BaseModel):
@@ -169,94 +173,171 @@ def listar_lancamentos(
 def criar_lancamento(payload: LancamentoInput):
     """
     Insere um novo lançamento validando coerência de data e derivando automaticamente
-    os campos de mês, ano e competência (Poka-Yoke contra erro de digitação de competência).
+    os campos de mês, ano e competência. Trata lançamentos com recorrência.
     """
     try:
-        dt = datetime.strptime(payload.data, "%Y-%m-%d")
+        dt_inicial = datetime.strptime(payload.data, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(
             status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
 
-    mes = dt.month
-    ano = dt.year
-    competencia = f"{mes:02d}/{ano}"
-
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao, competencia)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload.data,
-            mes,
-            ano,
-            payload.tipo,
-            payload.categoria,
-            payload.descricao.strip(),
-            round(payload.valor, 2),
-            payload.forma_pgto,
-            payload.observacao.strip(),
-            competencia,
-        ),
-    )
+
+    qty = payload.quantidade_recorrencia if payload.quantidade_recorrencia and payload.quantidade_recorrencia > 0 else 1
+    recorrencia_id = str(
+        uuid.uuid4()) if payload.frequencia_recorrencia else None
+
+    primeiro_id = None
+
+    for i in range(qty):
+        dt = dt_inicial
+        if payload.frequencia_recorrencia == 'Semanal':
+            dt = dt_inicial + relativedelta(weeks=i)
+        elif payload.frequencia_recorrencia == 'Mensal':
+            dt = dt_inicial + relativedelta(months=i)
+        elif payload.frequencia_recorrencia == 'Anual':
+            dt = dt_inicial + relativedelta(years=i)
+
+        mes = dt.month
+        ano = dt.year
+        competencia = f"{mes:02d}/{ano}"
+
+        cur.execute(
+            """
+            INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao, competencia, recorrencia_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                dt.strftime("%Y-%m-%d"),
+                mes,
+                ano,
+                payload.tipo,
+                payload.categoria,
+                payload.descricao.strip() if payload.descricao else "",
+                round(payload.valor, 2),
+                payload.forma_pgto,
+                payload.observacao.strip() if payload.observacao else "",
+                competencia,
+                recorrencia_id,
+            ),
+        )
+        if primeiro_id is None:
+            primeiro_id = cur.lastrowid
+
     conn.commit()
-    new_id = cur.lastrowid
     conn.close()
-    return {"status": "ok", "id": new_id}
+    return {"status": "ok", "id": primeiro_id, "recorrencia_id": recorrencia_id}
 
 
 @app.delete("/api/lancamentos/{lanc_id}")
-def excluir_lancamento(lanc_id: int):
-    """Remove um lançamento pelo ID."""
+def excluir_lancamento(lanc_id: int, escopo: Optional[str] = None):
+    """Remove um lançamento pelo ID. Se escopo='futuros', remove este e todos os futuros da mesma série."""
     conn = get_db_connection()
-    conn.execute("DELETE FROM lancamentos WHERE id = ?", (lanc_id,))
+    cur = conn.cursor()
+
+    if escopo == 'futuros':
+        row = cur.execute(
+            "SELECT data, recorrencia_id FROM lancamentos WHERE id = ?", (lanc_id,)).fetchone()
+        if row and row['recorrencia_id']:
+            cur.execute("DELETE FROM lancamentos WHERE recorrencia_id = ? AND data >= ?",
+                        (row['recorrencia_id'], row['data']))
+        else:
+            cur.execute("DELETE FROM lancamentos WHERE id = ?", (lanc_id,))
+    else:
+        cur.execute("DELETE FROM lancamentos WHERE id = ?", (lanc_id,))
+
     conn.commit()
     conn.close()
     return {"status": "deleted", "id": lanc_id}
 
 
 @app.put("/api/lancamentos/{lanc_id}")
-def atualizar_lancamento(lanc_id: int, payload: LancamentoInput):
-    """Atualiza um lançamento existente, recalculando competência, mês e ano."""
+def atualizar_lancamento(lanc_id: int, payload: LancamentoInput, escopo: Optional[str] = None):
+    """Atualiza um lançamento existente. Se escopo='futuros', atualiza todos os posteriores da mesma série."""
     try:
-        dt = datetime.strptime(payload.data, "%Y-%m-%d")
+        dt_nova = datetime.strptime(payload.data, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(
             status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
 
-    mes = dt.month
-    ano = dt.year
-    competencia = f"{mes:02d}/{ano}"
-
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE lancamentos
-        SET data = ?, mes = ?, ano = ?, tipo = ?, categoria = ?, descricao = ?,
-            valor = ?, forma_pgto = ?, observacao = ?, competencia = ?
-        WHERE id = ?
-        """,
-        (
-            payload.data,
-            mes,
-            ano,
-            payload.tipo,
-            payload.categoria,
-            payload.descricao.strip() if payload.descricao else "",
-            round(payload.valor, 2),
-            payload.forma_pgto,
-            payload.observacao.strip() if payload.observacao else "",
-            competencia,
-            lanc_id,
-        ),
-    )
-    if cur.rowcount == 0:
-        conn.close()
-        raise HTTPException(
-            status_code=404, detail="Lançamento não encontrado.")
+
+    if escopo == 'futuros':
+        row = cur.execute(
+            "SELECT data, recorrencia_id FROM lancamentos WHERE id = ?", (lanc_id,)).fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(
+                status_code=404, detail="Lançamento não encontrado.")
+
+        if row['recorrencia_id']:
+            # Pega todos os futuros para atualizar cada data individualmente mantendo o espaçamento/dia relativo original da série seria complexo.
+            # Em sistemas simples, a atualização de futuros costuma manter a data original deles, alterando apenas valores/categoria
+            # Mas se a data do lanc_id atual for mudada, devemos mudar a dos futuros?
+            # Para manter simples, vamos apenas atualizar tipo, categoria, descrição, valor, forma_pgto e observacao dos futuros
+            cur.execute(
+                """
+                UPDATE lancamentos
+                SET tipo = ?, categoria = ?, descricao = ?, valor = ?, forma_pgto = ?, observacao = ?
+                WHERE recorrencia_id = ? AND data > ?
+                """,
+                (
+                    payload.tipo,
+                    payload.categoria,
+                    payload.descricao.strip() if payload.descricao else "",
+                    round(payload.valor, 2),
+                    payload.forma_pgto,
+                    payload.observacao.strip() if payload.observacao else "",
+                    row['recorrencia_id'],
+                    row['data']
+                )
+            )
+            # Atualiza o atual normalmente, que pode ter mudado a data
+            mes = dt_nova.month
+            ano = dt_nova.year
+            cur.execute(
+                """
+                UPDATE lancamentos
+                SET data = ?, mes = ?, ano = ?, tipo = ?, categoria = ?, descricao = ?,
+                    valor = ?, forma_pgto = ?, observacao = ?, competencia = ?
+                WHERE id = ?
+                """,
+                (payload.data, mes, ano, payload.tipo, payload.categoria, payload.descricao.strip() if payload.descricao else "", round(
+                    payload.valor, 2), payload.forma_pgto, payload.observacao.strip() if payload.observacao else "", f"{mes:02d}/{ano}", lanc_id)
+            )
+        else:
+            escopo = None
+
+    if not escopo or escopo != 'futuros':
+        mes = dt_nova.month
+        ano = dt_nova.year
+        cur.execute(
+            """
+            UPDATE lancamentos
+            SET data = ?, mes = ?, ano = ?, tipo = ?, categoria = ?, descricao = ?,
+                valor = ?, forma_pgto = ?, observacao = ?, competencia = ?
+            WHERE id = ?
+            """,
+            (
+                payload.data,
+                mes,
+                ano,
+                payload.tipo,
+                payload.categoria,
+                payload.descricao.strip() if payload.descricao else "",
+                round(payload.valor, 2),
+                payload.forma_pgto,
+                payload.observacao.strip() if payload.observacao else "",
+                f"{mes:02d}/{ano}",
+                lanc_id,
+            ),
+        )
+        if cur.rowcount == 0:
+            conn.close()
+            raise HTTPException(
+                status_code=404, detail="Lançamento não encontrado.")
 
     conn.commit()
     conn.close()

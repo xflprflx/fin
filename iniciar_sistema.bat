@@ -15,8 +15,8 @@ if not exist ".venv\Scripts\activate.bat" (
 
 :: 2. Ativa o ambiente virtual e garante dependencias instaladas
 call ".venv\Scripts\activate.bat"
-echo [2/3] Verificando dependencias ^(FastAPI, Uvicorn, Pydantic^)...
-pip install --quiet --disable-pip-version-check fastapi uvicorn pydantic
+echo [2/3] Verificando dependencias ^(FastAPI, Uvicorn, Pydantic, python-dateutil^)...
+pip install --quiet --disable-pip-version-check fastapi uvicorn pydantic python-dateutil
 
 :: 3. Abre o navegador padrao e inicia o servidor Uvicorn na porta 8000
 echo [3/3] Iniciando servidor local em http://127.0.0.1:8000 ...

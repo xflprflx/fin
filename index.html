@@ -173,7 +173,31 @@
                             <input type="text" id="inpObs" placeholder="Itaú, Nubank, Caixa" value="Itaú" class="w-full rounded px-2 py-1.5 text-sm">
                         </div>
                     </div>
-                    <div class="sm:col-span-2 lg:col-span-7 flex justify-end pt-2">
+
+                    <!-- Linha extra para opções de recorrência -->
+                    <div class="sm:col-span-2 lg:col-span-7 flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-slate-800 mt-2">
+                        <div class="flex items-center gap-4">
+                            <label class="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+                                <input type="checkbox" id="inpRecorrente" onchange="toggleRecorrencia()" class="rounded border-slate-700 bg-slate-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900">
+                                Lançamento Recorrente?
+                            </label>
+
+                            <div id="optsRecorrencia" class="hidden flex items-center gap-3">
+                                <div>
+                                    <label class="text-xs text-slate-400 mr-1">Frequência:</label>
+                                    <select id="inpFreq" class="rounded px-2 py-1 text-sm">
+                                        <option value="Mensal">Mensal</option>
+                                        <option value="Semanal">Semanal</option>
+                                        <option value="Anual">Anual</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="text-xs text-slate-400 mr-1">Qtd Parcelas/Vezes:</label>
+                                    <input type="number" id="inpQtdRecorrencia" min="2" max="120" value="2" class="rounded px-2 py-1 text-sm w-16 text-center font-mono">
+                                </div>
+                            </div>
+                        </div>
+
                         <button type="submit" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm transition shadow">
                             💾 Registrar Lançamento
                         </button>
@@ -503,6 +527,12 @@
                 <div>
                     <label class="block text-xs text-slate-400 mb-1">Banco / Obs</label>
                     <input type="text" id="editObs" class="w-full rounded px-3 py-1.5 text-sm">
+                </div>
+                <div id="editRecorrenciaBox" class="sm:col-span-2 hidden bg-amber-500/10 border border-amber-500/20 p-3 rounded-lg mt-1">
+                    <label class="flex items-center gap-2 cursor-pointer text-sm text-amber-300">
+                        <input type="checkbox" id="editAplicarFuturos" class="rounded border-amber-700 bg-slate-800 text-amber-500 focus:ring-amber-500 focus:ring-offset-slate-900">
+                        Aplicar esta alteração em <strong>TODOS OS LANÇAMENTOS FUTUROS</strong> desta série?
+                    </label>
                 </div>
                 <div class="sm:col-span-2 flex justify-end gap-3 mt-2">
                     <button type="button" onclick="fecharModalEdicao()" class="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white transition">Cancelar</button>
@@ -842,7 +872,7 @@
                     <td class="text-slate-400 text-xs">${r.observacao}</td>
                     <td class="text-center whitespace-nowrap">
                         <button onclick="abrirModalEdicao('${rowData}')" class="text-slate-500 hover:text-sky-400 px-1 py-0.5 text-xs transition" title="Editar">✏️</button>
-                        <button onclick="removerLancamento(${r.id})" class="text-slate-500 hover:text-rose-400 px-1 py-0.5 text-xs transition" title="Excluir">🗑️</button>
+                        <button onclick="removerLancamento(${r.id}, '${r.recorrencia_id}')" class="text-slate-500 hover:text-rose-400 px-1 py-0.5 text-xs transition" title="Excluir">🗑️</button>
                     </td>
                 </tr>`;
             }).join('');
@@ -852,8 +882,19 @@
             document.getElementById('totFiltroSaldo').textContent = fmtBRL(totRec - totDesp);
         }
 
+        function toggleRecorrencia() {
+            const isRecorrente = document.getElementById('inpRecorrente').checked;
+            const opts = document.getElementById('optsRecorrencia');
+            if (isRecorrente) {
+                opts.classList.remove('hidden');
+            } else {
+                opts.classList.add('hidden');
+            }
+        }
+
         async function salvarLancamento(e) {
             e.preventDefault();
+
             const payload = {
                 data: document.getElementById('inpData').value,
                 tipo: document.getElementById('inpTipo').value,
@@ -863,6 +904,11 @@
                 forma_pgto: document.getElementById('inpFormaPgto').value,
                 observacao: document.getElementById('inpObs').value
             };
+
+            if (document.getElementById('inpRecorrente').checked) {
+                payload.frequencia_recorrencia = document.getElementById('inpFreq').value;
+                payload.quantidade_recorrencia = parseInt(document.getElementById('inpQtdRecorrencia').value);
+            }
 
             const res = await fetch('/api/lancamentos', {
                 method: 'POST',
@@ -893,6 +939,14 @@
             atualizarDropdownEdicaoCategoria();
             document.getElementById('editCategoria').value = data.categoria;
 
+            const recBox = document.getElementById('editRecorrenciaBox');
+            if (data.recorrencia_id) {
+                recBox.classList.remove('hidden');
+                document.getElementById('editAplicarFuturos').checked = false;
+            } else {
+                recBox.classList.add('hidden');
+            }
+
             document.getElementById('modalEdicaoLancamento').classList.remove('hidden');
         }
 
@@ -913,7 +967,10 @@
                 observacao: document.getElementById('editObs').value
             };
 
-            const res = await fetch(`/api/lancamentos/${id}`, {
+            const isFuturos = document.getElementById('editAplicarFuturos').checked;
+            const url = isFuturos ? `/api/lancamentos/${id}?escopo=futuros` : `/api/lancamentos/${id}`;
+
+            const res = await fetch(url, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -928,9 +985,19 @@
             }
         }
 
-        async function removerLancamento(id) {
-            if (!confirm('Deseja realmente excluir este lançamento?')) return;
-            await fetch(`/api/lancamentos/${id}`, { method: 'DELETE' });
+        async function removerLancamento(id, recorrencia_id = null) {
+            let msg = 'Deseja realmente excluir este lançamento?';
+            let escopo = '';
+
+            if (recorrencia_id && recorrencia_id !== 'null') {
+                if (confirm('Este lançamento faz parte de uma recorrência. Deseja excluir TODOS OS LANÇAMENTOS FUTUROS desta mesma série junto com este?\n\n[OK] = Excluir este e os futuros\n[Cancelar] = Excluir APENAS este')) {
+                    escopo = '?escopo=futuros';
+                }
+            } else {
+                if (!confirm(msg)) return;
+            }
+
+            await fetch(`/api/lancamentos/${id}${escopo}`, { method: 'DELETE' });
             await reloadAll();
         }
 
