@@ -135,7 +135,7 @@
                 <form id="formLancamento" onsubmit="salvarLancamento(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end">
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Data *</label>
-                        <input type="date" id="inpData" required class="w-full rounded px-3 py-1.5 text-sm">
+                        <input type="date" id="inpData" required onchange="atualizarCamposRecorrencia()" class="w-full rounded px-3 py-1.5 text-sm">
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
@@ -156,8 +156,8 @@
                         <input type="text" id="inpDescricao" required placeholder="Ex: Supermercado, Neodent..." class="w-full rounded px-3 py-1.5 text-sm">
                     </div>
                     <div>
-                        <label class="block text-xs text-slate-400 mb-1">Valor (R$) *</label>
-                        <input type="number" id="inpValor" step="0.01" min="0.01" required placeholder="0.00" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                        <label id="lblValor" class="block text-xs text-slate-400 mb-1">Valor (R$) *</label>
+                        <input type="number" id="inpValor" step="0.01" min="0.01" required placeholder="0.00" oninput="atualizarCamposRecorrencia()" class="w-full rounded px-3 py-1.5 text-sm font-mono">
                     </div>
                     <div class="flex gap-2">
                         <div class="flex-1">
@@ -174,6 +174,34 @@
                             <label class="block text-xs text-slate-400 mb-1">Banco / Obs</label>
                             <input type="text" id="inpObs" placeholder="Itaú, Nubank, Caixa" value="Itaú" class="w-full rounded px-2 py-1.5 text-sm">
                         </div>
+                    </div>
+                    <!-- Recorrência -->
+                    <div class="sm:col-span-2 lg:col-span-7 border-t border-slate-800 pt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end">
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">Recorrência</label>
+                            <select id="inpFrequencia" onchange="atualizarCamposRecorrencia()" class="w-full rounded px-3 py-1.5 text-sm">
+                                <option value="">Sem recorrência</option>
+                                <option value="semanal">Semanal</option>
+                                <option value="quinzenal">Quinzenal</option>
+                                <option value="mensal">Mensal</option>
+                                <option value="bimestral">Bimestral</option>
+                                <option value="trimestral">Trimestral</option>
+                                <option value="semestral">Semestral</option>
+                                <option value="anual">Anual</option>
+                            </select>
+                        </div>
+                        <div id="boxRecModo" class="hidden lg:col-span-2">
+                            <label class="block text-xs text-slate-400 mb-1">Como tratar o valor</label>
+                            <select id="inpRecModo" onchange="atualizarCamposRecorrencia()" class="w-full rounded px-3 py-1.5 text-sm">
+                                <option value="repetir">Repetir o valor em cada ocorrência (fixo)</option>
+                                <option value="parcelar">Dividir o valor total em parcelas</option>
+                            </select>
+                        </div>
+                        <div id="boxRecQtd" class="hidden">
+                            <label class="block text-xs text-slate-400 mb-1">Nº de ocorrências *</label>
+                            <input type="number" id="inpRecQtd" min="2" max="120" step="1" value="12" oninput="atualizarCamposRecorrencia()" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                        </div>
+                        <div id="boxRecResumo" class="hidden lg:col-span-3 text-xs text-slate-400 pb-2"></div>
                     </div>
                     <div class="sm:col-span-2 lg:col-span-7 flex justify-end pt-2">
                         <button type="submit" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm transition shadow">
@@ -202,6 +230,14 @@
                             <option value="">Todos</option>
                             <option value="Receita">Receita</option>
                             <option value="Despesa">Despesa</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs text-slate-400 mr-1">Recorrência:</label>
+                        <select id="filtroRecorrencia" onchange="carregarLancamentos()" class="rounded px-2.5 py-1 text-sm">
+                            <option value="">Todos</option>
+                            <option value="unico">Sem recorrência</option>
+                            <option value="recorrente">Recorrentes</option>
                         </select>
                     </div>
                     <div>
@@ -619,8 +655,35 @@
         </div>
     </div>
 
+    <!-- Modal de Exclusão de Lançamento Recorrente -->
+    <div id="modalExcluirRecorrente" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-base font-semibold text-white">🔁 Excluir lançamento recorrente</h3>
+                <button type="button" onclick="fecharModalExcluirRecorrente()" class="text-slate-400 hover:text-white text-lg">✕</button>
+            </div>
+            <p id="txtExcluirRecorrente" class="text-sm text-slate-300 mb-4"></p>
+            <div class="space-y-2">
+                <button type="button" onclick="excluirLancamentoEscopo('unico')" class="w-full text-left px-4 py-2.5 rounded bg-slate-800 hover:bg-slate-700 text-sm text-white transition">
+                    Apenas este lançamento
+                </button>
+                <button type="button" onclick="excluirLancamentoEscopo('futuros')" class="w-full text-left px-4 py-2.5 rounded bg-slate-800 hover:bg-slate-700 text-sm text-white transition">
+                    Este e os próximos da série
+                </button>
+                <button type="button" onclick="excluirLancamentoEscopo('todos')" class="w-full text-left px-4 py-2.5 rounded bg-rose-500/20 hover:bg-rose-500/30 text-sm text-rose-300 transition">
+                    Todos os lançamentos da série
+                </button>
+            </div>
+            <div class="flex justify-end pt-4">
+                <button type="button" onclick="fecharModalExcluirRecorrente()" class="px-4 py-2 rounded text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let categoriasCache = [];
+        let lancamentosCache = [];
+        let lancamentoExcluirId = null;
         let dashboardCache = null;
         let orcamentoCache = [];
         let chartEvolucaoInstance = null;
@@ -1165,9 +1228,12 @@
             if (mes) params.append('mes', mes);
             if (tipo) params.append('tipo', tipo);
             if (busca) params.append('busca', busca);
+            const recorrencia = document.getElementById('filtroRecorrencia').value;
+            if (recorrencia) params.append('recorrencia', recorrencia);
 
             const res = await fetch(`/api/lancamentos?${params.toString()}`);
             const rows = await res.json();
+            lancamentosCache = rows;
 
             let totRec = 0, totDesp = 0;
             const tbody = document.getElementById('tbody-lancamentos');
@@ -1185,7 +1251,9 @@
                     <td class="font-mono text-xs text-slate-400">${r.competencia}</td>
                     <td><span class="px-2 py-0.5 rounded text-xs font-medium ${badgeCls}">${r.tipo}</span></td>
                     <td class="text-slate-200">${r.categoria}</td>
-                    <td class="text-white font-medium">${r.descricao}</td>
+                    <td class="text-white font-medium">${r.descricao}${r.recorrencia_id
+                        ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300" title="Lançamento recorrente">🔁 ${r.parcela_num}/${r.parcela_total}</span>`
+                        : ''}</td>
                     <td class="text-right font-mono ${valCls}">${fmtBRL(r.valor)}</td>
                     <td class="text-slate-300 text-xs">${r.forma_pgto}</td>
                     <td class="text-slate-400 text-xs">${r.observacao}</td>
@@ -1212,6 +1280,20 @@
                 observacao: document.getElementById('inpObs').value
             };
 
+            const frequencia = document.getElementById('inpFrequencia').value;
+            if (frequencia) {
+                const ocorrencias = parseInt(document.getElementById('inpRecQtd').value, 10);
+                if (!ocorrencias || ocorrencias < 2 || ocorrencias > 120) {
+                    alert('Informe entre 2 e 120 ocorrências para a recorrência.');
+                    return;
+                }
+                payload.recorrencia = {
+                    frequencia,
+                    ocorrencias,
+                    modo: document.getElementById('inpRecModo').value
+                };
+            }
+
             const res = await fetch('/api/lancamentos', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1219,9 +1301,18 @@
             });
 
             if (res.ok) {
+                const out = await res.json();
                 document.getElementById('inpDescricao').value = '';
                 document.getElementById('inpValor').value = '';
+                document.getElementById('inpFrequencia').value = '';
+                atualizarCamposRecorrencia();
                 await reloadAll();
+                if (out.quantidade > 1) {
+                    const anoAtual = document.getElementById('globalAno').value;
+                    const foraDoAno = out.ultima_data.slice(0, 4) !== anoAtual;
+                    alert(`${out.quantidade} lançamentos gerados de ${fmtData(out.primeira_data)} até ${fmtData(out.ultima_data)}.`
+                        + (foraDoAno ? '\n\nAlgumas ocorrências caem em outro ano — troque o ano no topo para vê-las.' : ''));
+                }
             } else {
                 const err = await res.json();
                 alert('Erro ao salvar: ' + (err.detail || 'Verifique os campos.'));
@@ -1229,9 +1320,63 @@
         }
 
         async function removerLancamento(id) {
+            const lanc = lancamentosCache.find(l => l.id === id);
+            if (lanc && lanc.recorrencia_id) {
+                lancamentoExcluirId = id;
+                document.getElementById('txtExcluirRecorrente').textContent =
+                    `"${lanc.descricao}" (${fmtData(lanc.data)}) é a ocorrência ${lanc.parcela_num} de ${lanc.parcela_total} de uma série. O que deseja excluir?`;
+                document.getElementById('modalExcluirRecorrente').classList.remove('hidden');
+                return;
+            }
             if (!confirm('Deseja realmente excluir este lançamento?')) return;
             await fetch(`/api/lancamentos/${id}`, { method: 'DELETE' });
             await reloadAll();
+        }
+
+        function fecharModalExcluirRecorrente() {
+            lancamentoExcluirId = null;
+            document.getElementById('modalExcluirRecorrente').classList.add('hidden');
+        }
+
+        async function excluirLancamentoEscopo(escopo) {
+            const id = lancamentoExcluirId;
+            if (!id) return;
+            const res = await fetch(`/api/lancamentos/${id}?escopo=${escopo}`, { method: 'DELETE' });
+            fecharModalExcluirRecorrente();
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert('Erro ao excluir: ' + (err.detail || res.status));
+            }
+            await reloadAll();
+        }
+
+        const fmtData = (iso) => iso.split('-').reverse().join('/');
+
+        // Mostra/oculta campos de recorrência e exibe uma prévia do que será gerado
+        function atualizarCamposRecorrencia() {
+            const freq = document.getElementById('inpFrequencia').value;
+            const ativo = !!freq;
+            ['boxRecModo', 'boxRecQtd', 'boxRecResumo'].forEach(id =>
+                document.getElementById(id).classList.toggle('hidden', !ativo));
+            const inpQtd = document.getElementById('inpRecQtd');
+            inpQtd.required = ativo;
+            const modo = document.getElementById('inpRecModo').value;
+            document.getElementById('lblValor').textContent =
+                ativo && modo === 'parcelar' ? 'Valor TOTAL (R$) *' : 'Valor (R$) *';
+            if (!ativo) return;
+
+            const qtd = parseInt(inpQtd.value, 10) || 0;
+            const valor = parseFloat(document.getElementById('inpValor').value) || 0;
+
+            const resumo = document.getElementById('boxRecResumo');
+            if (qtd < 2) { resumo.textContent = 'Informe pelo menos 2 ocorrências.'; return; }
+            const porOcorrencia = modo === 'parcelar' ? valor / qtd : valor;
+            const total = modo === 'parcelar' ? valor : valor * qtd;
+            const FREQ_LABEL = { semanal: 'semanais', quinzenal: 'quinzenais', mensal: 'mensais', bimestral: 'bimestrais',
+                                 trimestral: 'trimestrais', semestral: 'semestrais', anual: 'anuais' };
+            resumo.innerHTML = `Serão gerados <strong class="text-white">${qtd}</strong> lançamentos ${FREQ_LABEL[freq]} de `
+                + `<strong class="text-white">${fmtBRL(porOcorrencia)}</strong> `
+                + `(total <strong class="text-white">${fmtBRL(total)}</strong>).`;
         }
 
         // 3. Orçamento vs Realizado

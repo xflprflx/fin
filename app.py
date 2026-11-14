@@ -6,8 +6,10 @@ Investimentos, Dívidas, Metas e Reserva de Emergência, com mecanismos de Poka-
 import os
 import sqlite3
 import json
-from datetime import datetime
-from typing import Optional
+import calendar
+import uuid
+from datetime import datetime, date, timedelta
+from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +61,16 @@ def init_db():
             competencia TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS recorrencias (
+            id TEXT PRIMARY KEY,
+            frequencia TEXT NOT NULL,
+            modo TEXT NOT NULL,
+            ocorrencias INTEGER NOT NULL,
+            data_inicio TEXT NOT NULL,
+            valor_informado REAL NOT NULL,
+            criado_em TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS orcamento (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             macro_categoria TEXT NOT NULL,
@@ -103,6 +115,17 @@ def init_db():
             saldo_atual_reserva REAL DEFAULT 0.0
         );
     """)
+
+    # Migração: colunas de recorrência em lançamentos (bancos antigos)
+    colunas_lanc = {r[1] for r in cur.execute("PRAGMA table_info(lancamentos)").fetchall()}
+    for col, ddl in (
+        ("recorrencia_id", "TEXT"),
+        ("parcela_num", "INTEGER"),
+        ("parcela_total", "INTEGER"),
+    ):
+        if col not in colunas_lanc:
+            cur.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {ddl}")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_lanc_recorrencia ON lancamentos(recorrencia_id)")
 
     # Garante configuração inicial da reserva de emergência
     row_res = cur.execute("SELECT id FROM reserva_config WHERE id = 1").fetchone()
@@ -213,6 +236,29 @@ class CategoriaUpdateInput(BaseModel):
     macro_categoria: str = Field(default="Outros")
 
 
+FREQUENCIAS = {
+    # nome: (tipo de passo, quantidade)
+    "semanal": ("dias", 7),
+    "quinzenal": ("dias", 14),
+    "mensal": ("meses", 1),
+    "bimestral": ("meses", 2),
+    "trimestral": ("meses", 3),
+    "semestral": ("meses", 6),
+    "anual": ("meses", 12),
+}
+MAX_OCORRENCIAS = 120
+
+
+class RecorrenciaInput(BaseModel):
+    frequencia: str = Field(..., pattern="^(semanal|quinzenal|mensal|bimestral|trimestral|semestral|anual)$")
+    ocorrencias: int = Field(..., ge=2, le=MAX_OCORRENCIAS, description="Quantidade total de lançamentos gerados")
+    modo: str = Field(
+        default="repetir",
+        pattern="^(repetir|parcelar)$",
+        description="repetir = mesmo valor em cada ocorrência; parcelar = valor total dividido entre as parcelas",
+    )
+
+
 class LancamentoInput(BaseModel):
     data: str = Field(..., description="Data no formato YYYY-MM-DD")
     tipo: str = Field(..., pattern="^(Receita|Despesa)$")
@@ -221,6 +267,7 @@ class LancamentoInput(BaseModel):
     valor: float = Field(..., gt=0, description="O valor deve ser estritamente positivo")
     forma_pgto: str = "PIX"
     observacao: Optional[str] = ""
+    recorrencia: Optional[RecorrenciaInput] = None
 
 
 class OrcamentoInput(BaseModel):
@@ -257,6 +304,35 @@ class ReservaUpdate(BaseModel):
     usar_media_automatica: int
     meses_seguranca: int
     saldo_atual_reserva: float
+
+
+# ==========================================
+# Utilitários de Recorrência
+# ==========================================
+def somar_meses(dt: date, meses: int) -> date:
+    """Soma meses preservando o dia; se o mês destino for mais curto, usa o último dia (ex.: 31/01 -> 28/02)."""
+    total = dt.month - 1 + meses
+    ano = dt.year + total // 12
+    mes = total % 12 + 1
+    dia = min(dt.day, calendar.monthrange(ano, mes)[1])
+    return date(ano, mes, dia)
+
+
+def gerar_datas(inicio: date, frequencia: str, ocorrencias: int) -> List[date]:
+    """Gera as datas de cada ocorrência sempre a partir da data inicial (evita 'deriva' de dias)."""
+    passo, qtd = FREQUENCIAS[frequencia]
+    if passo == "dias":
+        return [inicio + timedelta(days=qtd * i) for i in range(ocorrencias)]
+    return [somar_meses(inicio, qtd * i) for i in range(ocorrencias)]
+
+
+def dividir_valor(total: float, partes: int) -> List[float]:
+    """Divide um valor em centavos exatos; a diferença de arredondamento vai para a primeira parcela."""
+    centavos = int(round(total * 100))
+    base, resto = divmod(centavos, partes)
+    valores = [base] * partes
+    valores[0] += resto
+    return [v / 100 for v in valores]
 
 
 # ==========================================
@@ -421,8 +497,17 @@ def excluir_categoria(cat_id: int, forcar: bool = False):
 
 
 @app.get("/api/lancamentos")
-def listar_lancamentos(ano: int = 2026, mes: Optional[int] = None, tipo: Optional[str] = None, busca: Optional[str] = None):
-    """Lista os lançamentos com suporte a filtros combinados de ano, mês, tipo e termo de busca."""
+def listar_lancamentos(
+    ano: int = 2026,
+    mes: Optional[int] = None,
+    tipo: Optional[str] = None,
+    busca: Optional[str] = None,
+    recorrencia: Optional[str] = None,
+):
+    """
+    Lista os lançamentos com suporte a filtros combinados de ano, mês, tipo, termo de busca
+    e recorrência (recorrencia=unico | recorrente).
+    """
     conn = get_db_connection()
     query = "SELECT * FROM lancamentos WHERE ano = ?"
     params = [ano]
@@ -437,6 +522,10 @@ def listar_lancamentos(ano: int = 2026, mes: Optional[int] = None, tipo: Optiona
         query += " AND (descricao LIKE ? OR categoria LIKE ? OR observacao LIKE ?)"
         termo = f"%{busca}%"
         params.extend([termo, termo, termo])
+    if recorrencia == "unico":
+        query += " AND recorrencia_id IS NULL"
+    elif recorrencia == "recorrente":
+        query += " AND recorrencia_id IS NOT NULL"
 
     query += " ORDER BY data DESC, id DESC"
     rows = conn.execute(query, params).fetchall()
@@ -449,50 +538,127 @@ def criar_lancamento(payload: LancamentoInput):
     """
     Insere um novo lançamento validando coerência de data e derivando automaticamente
     os campos de mês, ano e competência (Poka-Yoke contra erro de digitação de competência).
+
+    Se `recorrencia` for informada, gera todas as ocorrências da série de uma vez,
+    vinculadas por `recorrencia_id` e numeradas (parcela_num / parcela_total).
     """
     try:
-        dt = datetime.strptime(payload.data, "%Y-%m-%d")
+        dt = datetime.strptime(payload.data, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
 
-    mes = dt.month
-    ano = dt.year
-    competencia = f"{mes:02d}/{ano}"
+    descricao = (payload.descricao or "").strip()
+    observacao = (payload.observacao or "").strip()
+    valor = round(payload.valor, 2)
+    rec = payload.recorrencia
+
+    if rec is None:
+        datas = [dt]
+        valores = [valor]
+        recorrencia_id = None
+    else:
+        datas = gerar_datas(dt, rec.frequencia, rec.ocorrencias)
+        if rec.modo == "parcelar":
+            if valor < 0.01 * rec.ocorrencias:
+                raise HTTPException(status_code=400, detail="Valor total muito baixo para a quantidade de parcelas.")
+            valores = dividir_valor(valor, rec.ocorrencias)
+        else:
+            valores = [valor] * rec.ocorrencias
+        recorrencia_id = uuid.uuid4().hex
 
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao, competencia)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            payload.data,
-            mes,
-            ano,
-            payload.tipo,
-            payload.categoria,
-            payload.descricao.strip(),
-            round(payload.valor, 2),
-            payload.forma_pgto,
-            payload.observacao.strip(),
-            competencia,
-        ),
-    )
-    conn.commit()
-    new_id = cur.lastrowid
-    conn.close()
-    return {"status": "ok", "id": new_id}
+    ids = []
+    try:
+        if recorrencia_id:
+            cur.execute(
+                """
+                INSERT INTO recorrencias (id, frequencia, modo, ocorrencias, data_inicio, valor_informado, criado_em)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (recorrencia_id, rec.frequencia, rec.modo, rec.ocorrencias, payload.data, valor,
+                 datetime.now().isoformat(timespec="seconds")),
+            )
+        total = len(datas)
+        for i, (d, v) in enumerate(zip(datas, valores), start=1):
+            cur.execute(
+                """
+                INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao,
+                                         competencia, recorrencia_id, parcela_num, parcela_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    d.isoformat(),
+                    d.month,
+                    d.year,
+                    payload.tipo,
+                    payload.categoria,
+                    descricao,
+                    v,
+                    payload.forma_pgto,
+                    observacao,
+                    f"{d.month:02d}/{d.year}",
+                    recorrencia_id,
+                    i if recorrencia_id else None,
+                    total if recorrencia_id else None,
+                ),
+            )
+            ids.append(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "status": "ok",
+        "id": ids[0],
+        "ids": ids,
+        "recorrencia_id": recorrencia_id,
+        "quantidade": len(ids),
+        "primeira_data": datas[0].isoformat(),
+        "ultima_data": datas[-1].isoformat(),
+    }
 
 
 @app.delete("/api/lancamentos/{lanc_id}")
-def excluir_lancamento(lanc_id: int):
-    """Remove um lançamento pelo ID."""
+def excluir_lancamento(lanc_id: int, escopo: str = "unico"):
+    """
+    Remove um lançamento pelo ID.
+    Para lançamentos recorrentes, `escopo` define o alcance:
+      - unico: apenas este lançamento
+      - futuros: este e os seguintes da mesma série
+      - todos: a série inteira
+    """
+    if escopo not in ("unico", "futuros", "todos"):
+        raise HTTPException(status_code=400, detail="Escopo inválido. Use unico, futuros ou todos.")
+
     conn = get_db_connection()
-    conn.execute("DELETE FROM lancamentos WHERE id = ?", (lanc_id,))
+    cur = conn.cursor()
+    lanc = cur.execute("SELECT * FROM lancamentos WHERE id = ?", (lanc_id,)).fetchone()
+    if not lanc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
+
+    rid = lanc["recorrencia_id"]
+    if not rid or escopo == "unico":
+        cur.execute("DELETE FROM lancamentos WHERE id = ?", (lanc_id,))
+    elif escopo == "futuros":
+        cur.execute(
+            "DELETE FROM lancamentos WHERE recorrencia_id = ? AND parcela_num >= ?",
+            (rid, lanc["parcela_num"]),
+        )
+    else:
+        cur.execute("DELETE FROM lancamentos WHERE recorrencia_id = ?", (rid,))
+    removidos = cur.rowcount
+
+    # Remove metadados da série se não sobrou nenhum lançamento
+    if rid:
+        restantes = cur.execute("SELECT COUNT(*) FROM lancamentos WHERE recorrencia_id = ?", (rid,)).fetchone()[0]
+        if restantes == 0:
+            cur.execute("DELETE FROM recorrencias WHERE id = ?", (rid,))
+
     conn.commit()
     conn.close()
-    return {"status": "deleted", "id": lanc_id}
+    return {"status": "deleted", "id": lanc_id, "escopo": escopo, "removidos": removidos}
 
 
 @app.get("/api/dashboard")
