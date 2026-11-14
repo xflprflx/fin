@@ -326,6 +326,43 @@ def gerar_datas(inicio: date, frequencia: str, ocorrencias: int) -> List[date]:
     return [somar_meses(inicio, qtd * i) for i in range(ocorrencias)]
 
 
+MESES_ABREV = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+
+def janela_meses(ano: int, mes_inicio: int = 1, qtd: int = 12) -> List[dict]:
+    """
+    Monta uma linha do tempo de `qtd` meses começando em mes_inicio/ano, podendo atravessar a virada
+    de ano (ex.: Nov/2026 → Out/2027). Cada item traz a posição (1..qtd), ano, mês e rótulo.
+    """
+    if not 1 <= mes_inicio <= 12:
+        raise HTTPException(status_code=400, detail="mes_inicio deve estar entre 1 e 12.")
+    periodos = []
+    for i in range(qtd):
+        total = mes_inicio - 1 + i
+        a, m = ano + total // 12, total % 12 + 1
+        periodos.append({"pos": i + 1, "ano": a, "mes": m, "label": f"{MESES_ABREV[m - 1]}/{str(a)[2:]}"})
+    return periodos
+
+
+def chave_periodo(ano: int, mes: int) -> int:
+    """Chave numérica comparável AAAAMM."""
+    return ano * 100 + mes
+
+
+def filtro_janela(periodos: List[dict], prefixo: str = "") -> tuple:
+    """Retorna (sql, params) que restringe a consulta ao intervalo da janela."""
+    ini, fim = periodos[0], periodos[-1]
+    return (
+        f"({prefixo}ano * 100 + {prefixo}mes) BETWEEN ? AND ?",
+        [chave_periodo(ini["ano"], ini["mes"]), chave_periodo(fim["ano"], fim["mes"])],
+    )
+
+
+def mapa_posicoes(periodos: List[dict]) -> dict:
+    """(ano, mes) -> posição na janela."""
+    return {(p["ano"], p["mes"]): p["pos"] for p in periodos}
+
+
 def dividir_valor(total: float, partes: int) -> List[float]:
     """Divide um valor em centavos exatos; a diferença de arredondamento vai para a primeira parcela."""
     centavos = int(round(total * 100))
@@ -499,22 +536,35 @@ def excluir_categoria(cat_id: int, forcar: bool = False):
 @app.get("/api/lancamentos")
 def listar_lancamentos(
     ano: int = 2026,
+    mes_inicio: int = 1,
+    periodo: Optional[str] = None,
     mes: Optional[int] = None,
     tipo: Optional[str] = None,
     busca: Optional[str] = None,
     recorrencia: Optional[str] = None,
 ):
     """
-    Lista os lançamentos com suporte a filtros combinados de ano, mês, tipo, termo de busca
+    Lista os lançamentos com suporte a filtros combinados de período, tipo, termo de busca
     e recorrência (recorrencia=unico | recorrente).
+
+    Período: por padrão, a janela de 12 meses iniciada em mes_inicio/ano.
+    `periodo=AAAA-MM` restringe a um único mês; `mes` (legado) filtra um mês do `ano`.
     """
     conn = get_db_connection()
-    query = "SELECT * FROM lancamentos WHERE ano = ?"
-    params = [ano]
-
-    if mes:
-        query += " AND mes = ?"
-        params.append(mes)
+    if periodo:
+        try:
+            p_ano, p_mes = (int(x) for x in periodo.split("-"))
+        except ValueError:
+            conn.close()
+            raise HTTPException(status_code=400, detail="periodo deve estar no formato AAAA-MM.")
+        query = "SELECT * FROM lancamentos WHERE ano = ? AND mes = ?"
+        params = [p_ano, p_mes]
+    elif mes:
+        query = "SELECT * FROM lancamentos WHERE ano = ? AND mes = ?"
+        params = [ano, mes]
+    else:
+        sql_j, params = filtro_janela(janela_meses(ano, mes_inicio))
+        query = f"SELECT * FROM lancamentos WHERE {sql_j}"
     if tipo and tipo in ("Receita", "Despesa"):
         query += " AND tipo = ?"
         params.append(tipo)
@@ -662,104 +712,108 @@ def excluir_lancamento(lanc_id: int, escopo: str = "unico"):
 
 
 @app.get("/api/dashboard")
-def obter_dashboard(ano: int = 2026):
+def obter_dashboard(ano: int = 2026, mes_inicio: int = 1):
     """
-    Calcula toda a matriz anual do Dashboard (Receita, Despesa, Saldo do Mês,
+    Calcula a matriz do Dashboard para uma janela de 12 meses (Receita, Despesa, Saldo do Mês,
     Saldo Acumulado, % Poupado, Orçado vs Realizado, e Resumo por Categoria).
+
+    A janela começa em mes_inicio/ano e pode atravessar a virada do ano. As séries são indexadas
+    pela posição na janela (1..12); `periodos` informa ano/mês/rótulo de cada posição.
     """
+    periodos = janela_meses(ano, mes_inicio)
+    pos_de = mapa_posicoes(periodos)
+    posicoes = range(1, 13)
+    sql_j, params_j = filtro_janela(periodos)
     conn = get_db_connection()
 
     # 1. Receitas e Despesas por mês
     rows_mes = conn.execute(
-        """
-        SELECT mes, tipo, SUM(valor) as total
+        f"""
+        SELECT ano, mes, tipo, SUM(valor) as total
         FROM lancamentos
-        WHERE ano = ?
-        GROUP BY mes, tipo
+        WHERE {sql_j}
+        GROUP BY ano, mes, tipo
         """,
-        (ano,),
+        params_j,
     ).fetchall()
 
-    receitas_mes = {m: 0.0 for m in range(1, 13)}
-    despesas_mes = {m: 0.0 for m in range(1, 13)}
+    receitas_mes = {p: 0.0 for p in posicoes}
+    despesas_mes = {p: 0.0 for p in posicoes}
     for r in rows_mes:
+        pos = pos_de[(r["ano"], r["mes"])]
         if r["tipo"] == "Receita":
-            receitas_mes[r["mes"]] = round(r["total"], 2)
+            receitas_mes[pos] = round(r["total"], 2)
         else:
-            despesas_mes[r["mes"]] = round(r["total"], 2)
+            despesas_mes[pos] = round(r["total"], 2)
 
     # 2. Orçamento total por mês
     rows_orc = conn.execute(
-        """
-        SELECT mes, SUM(valor_orcado) as total_orcado
+        f"""
+        SELECT ano, mes, SUM(valor_orcado) as total_orcado
         FROM orcamento
-        WHERE ano = ?
-        GROUP BY mes
+        WHERE {sql_j}
+        GROUP BY ano, mes
         """,
-        (ano,),
+        params_j,
     ).fetchall()
-    orcado_mes = {m: 0.0 for m in range(1, 13)}
+    orcado_mes = {p: 0.0 for p in posicoes}
     for r in rows_orc:
-        orcado_mes[r["mes"]] = round(r["total_orcado"] or 0.0, 2)
+        orcado_mes[pos_de[(r["ano"], r["mes"])]] = round(r["total_orcado"] or 0.0, 2)
 
-    # 3. Cálculos mensais derivados
+    # 3. Cálculos mensais derivados (acumulado segue a ordem da janela)
     saldo_mes = {}
     saldo_acumulado = {}
     pct_poupado = {}
     orcado_vs_real = {}
     acum = 0.0
 
-    for m in range(1, 13):
-        rec = receitas_mes[m]
-        desp = despesas_mes[m]
+    for p in posicoes:
+        rec = receitas_mes[p]
+        desp = despesas_mes[p]
         s_mes = round(rec - desp, 2)
-        saldo_mes[m] = s_mes
+        saldo_mes[p] = s_mes
         acum = round(acum + s_mes, 2)
-        saldo_acumulado[m] = acum
-        pct_poupado[m] = round((s_mes / rec) * 100, 2) if rec > 0 else 0.0
-        orcado_vs_real[m] = round(desp - orcado_mes[m], 2) if orcado_mes[m] > 0 or desp > 0 else 0.0
+        saldo_acumulado[p] = acum
+        pct_poupado[p] = round((s_mes / rec) * 100, 2) if rec > 0 else 0.0
+        orcado_vs_real[p] = round(desp - orcado_mes[p], 2) if orcado_mes[p] > 0 or desp > 0 else 0.0
 
-    # 4. Resumo por Categoria (aba ⚙ Resumo / 📥 Receitas)
+    # 4. Resumo por Categoria (aba 📥 Receitas & Despesas)
+    sql_jl, params_jl = filtro_janela(periodos, "l.")
     rows_cat = conn.execute(
-        """
+        f"""
         SELECT l.categoria, l.tipo, COALESCE(c.macro_categoria, 'Outros') as macro_categoria,
-               l.mes, SUM(l.valor) as total
+               l.ano, l.mes, SUM(l.valor) as total
         FROM lancamentos l
         LEFT JOIN categorias c ON l.categoria = c.nome
-        WHERE l.ano = ?
-        GROUP BY l.categoria, l.tipo, l.mes
+        WHERE {sql_jl}
+        GROUP BY l.categoria, l.tipo, l.ano, l.mes
         """,
-        (ano,),
+        params_jl,
     ).fetchall()
 
     todas_cats = conn.execute("SELECT nome, tipo, macro_categoria FROM categorias ORDER BY id ASC").fetchall()
     resumo_categorias = []
     mapa_cat = {}
-    for c in todas_cats:
+
+    def novo_item(nome, tipo, macro):
         item = {
-            "categoria": c["nome"],
-            "tipo": c["tipo"],
-            "macro_categoria": c["macro_categoria"],
-            "meses": {m: 0.0 for m in range(1, 13)},
+            "categoria": nome,
+            "tipo": tipo,
+            "macro_categoria": macro,
+            "meses": {p: 0.0 for p in posicoes},
             "total_ano": 0.0,
         }
         resumo_categorias.append(item)
-        mapa_cat[c["nome"]] = item
+        mapa_cat[nome] = item
+        return item
+
+    for c in todas_cats:
+        novo_item(c["nome"], c["tipo"], c["macro_categoria"])
 
     for r in rows_cat:
-        nome_c = r["categoria"]
-        if nome_c not in mapa_cat:
-            item = {
-                "categoria": nome_c,
-                "tipo": r["tipo"],
-                "macro_categoria": r["macro_categoria"],
-                "meses": {m: 0.0 for m in range(1, 13)},
-                "total_ano": 0.0,
-            }
-            resumo_categorias.append(item)
-            mapa_cat[nome_c] = item
-        mapa_cat[nome_c]["meses"][r["mes"]] = round(r["total"], 2)
-        mapa_cat[nome_c]["total_ano"] = round(sum(mapa_cat[nome_c]["meses"].values()), 2)
+        item = mapa_cat.get(r["categoria"]) or novo_item(r["categoria"], r["tipo"], r["macro_categoria"])
+        item["meses"][pos_de[(r["ano"], r["mes"])]] = round(r["total"], 2)
+        item["total_ano"] = round(sum(item["meses"].values()), 2)
 
     # 5. Totais de Carteira, Dívidas e Reserva
     tot_inv = conn.execute("SELECT COALESCE(SUM(saldo_atual), 0) FROM investimentos").fetchone()[0]
@@ -774,6 +828,8 @@ def obter_dashboard(ano: int = 2026):
 
     return {
         "ano": ano,
+        "mes_inicio": mes_inicio,
+        "periodos": periodos,
         "kpis": {
             "total_receita": total_receita_ano,
             "total_despesa": total_despesa_ano,
@@ -797,8 +853,14 @@ def obter_dashboard(ano: int = 2026):
 
 
 @app.get("/api/orcamento")
-def obter_orcamento(ano: int = 2026):
-    """Retorna a matriz de Orçamento vs Realizado por Macro-Categoria e Mês."""
+def obter_orcamento(ano: int = 2026, mes_inicio: int = 1):
+    """
+    Retorna a matriz de Orçamento vs Realizado por Macro-Categoria para uma janela de 12 meses.
+    Valores indexados pela posição (1..12) na janela; `periodos` traz ano/mês de cada posição.
+    """
+    periodos = janela_meses(ano, mes_inicio)
+    pos_de = mapa_posicoes(periodos)
+    posicoes = range(1, 13)
     conn = get_db_connection()
 
     macros = [
@@ -806,28 +868,32 @@ def obter_orcamento(ano: int = 2026):
         "Lazer", "Vestuário", "Pessoal", "Financeiro", "Poupança/Investimentos", "Outros"
     ]
 
-    rows_orc = conn.execute("SELECT macro_categoria, mes, valor_orcado FROM orcamento WHERE ano = ?", (ano,)).fetchall()
-    orc_map = {(r["macro_categoria"], r["mes"]): round(r["valor_orcado"], 2) for r in rows_orc}
+    sql_j, params_j = filtro_janela(periodos)
+    rows_orc = conn.execute(
+        f"SELECT macro_categoria, ano, mes, valor_orcado FROM orcamento WHERE {sql_j}", params_j
+    ).fetchall()
+    orc_map = {(r["macro_categoria"], pos_de[(r["ano"], r["mes"])]): round(r["valor_orcado"], 2) for r in rows_orc}
 
+    sql_jl, params_jl = filtro_janela(periodos, "l.")
     rows_real = conn.execute(
-        """
-        SELECT COALESCE(c.macro_categoria, 'Outros') as macro, l.mes, SUM(l.valor) as total
+        f"""
+        SELECT COALESCE(c.macro_categoria, 'Outros') as macro, l.ano, l.mes, SUM(l.valor) as total
         FROM lancamentos l
         LEFT JOIN categorias c ON l.categoria = c.nome
-        WHERE l.ano = ? AND l.tipo = 'Despesa'
-        GROUP BY macro, l.mes
+        WHERE {sql_jl} AND l.tipo = 'Despesa'
+        GROUP BY macro, l.ano, l.mes
         """,
-        (ano,),
+        params_jl,
     ).fetchall()
-    real_map = {(r["macro"], r["mes"]): round(r["total"], 2) for r in rows_real}
+    real_map = {(r["macro"], pos_de[(r["ano"], r["mes"])]): round(r["total"], 2) for r in rows_real}
 
     conn.close()
 
     resultado = []
     for mac in macros:
-        orc_meses = {m: orc_map.get((mac, m), 0.0) for m in range(1, 13)}
-        real_meses = {m: real_map.get((mac, m), 0.0) for m in range(1, 13)}
-        dif_meses = {m: round(real_meses[m] - orc_meses[m], 2) for m in range(1, 13)}
+        orc_meses = {p: orc_map.get((mac, p), 0.0) for p in posicoes}
+        real_meses = {p: real_map.get((mac, p), 0.0) for p in posicoes}
+        dif_meses = {p: round(real_meses[p] - orc_meses[p], 2) for p in posicoes}
         tot_orc = round(sum(orc_meses.values()), 2)
         tot_real = round(sum(real_meses.values()), 2)
         resultado.append({
@@ -840,7 +906,7 @@ def obter_orcamento(ano: int = 2026):
             "variacao_anual": round(tot_real - tot_orc, 2),
         })
 
-    return resultado
+    return {"periodos": periodos, "linhas": resultado}
 
 
 @app.post("/api/orcamento")
@@ -861,7 +927,7 @@ def atualizar_orcamento(payload: OrcamentoInput):
 
 
 @app.get("/api/planejamento")
-def obter_planejamento(ano: int = 2026):
+def obter_planejamento(ano: int = 2026, mes_inicio: int = 1):
     """Retorna os dados consolidados de Investimentos, Dívidas, Metas e Reserva de Emergência."""
     conn = get_db_connection()
     inv = [dict(r) for r in conn.execute("SELECT * FROM investimentos ORDER BY id ASC").fetchall()]
@@ -869,17 +935,18 @@ def obter_planejamento(ano: int = 2026):
     metas = [dict(r) for r in conn.execute("SELECT * FROM metas ORDER BY id ASC").fetchall()]
     res_cfg = dict(conn.execute("SELECT * FROM reserva_config WHERE id = 1").fetchone())
 
-    # Calcula despesa mensal média automática dos meses com movimentação
+    # Calcula despesa mensal média automática dos meses com movimentação dentro da janela
+    sql_j, params_j = filtro_janela(janela_meses(ano, mes_inicio))
     row_media = conn.execute(
-        """
+        f"""
         SELECT AVG(total_mes) as media FROM (
-            SELECT mes, SUM(valor) as total_mes
+            SELECT ano, mes, SUM(valor) as total_mes
             FROM lancamentos
-            WHERE ano = ? AND tipo = 'Despesa'
-            GROUP BY mes
+            WHERE {sql_j} AND tipo = 'Despesa'
+            GROUP BY ano, mes
         )
         """,
-        (ano,),
+        params_j,
     ).fetchone()
     despesa_media_auto = round(row_media["media"] or 0.0, 2)
     despesa_base = despesa_media_auto if res_cfg["usar_media_automatica"] else res_cfg["despesa_media_manual"]

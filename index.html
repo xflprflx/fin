@@ -25,7 +25,7 @@
             <span class="text-2xl">💰</span>
             <div>
                 <h1 class="text-lg font-bold tracking-tight text-white">CONTROLE FINANCEIRO PESSOAL</h1>
-                <p class="text-xs text-slate-400">SQLite + FastAPI • Poka-Yoke Ativo • Exercício 2026</p>
+                <p class="text-xs text-slate-400">SQLite + FastAPI • Poka-Yoke Ativo • Período <span id="lblPeriodoSub">—</span></p>
             </div>
         </div>
 
@@ -38,13 +38,23 @@
             <button onclick="switchTab('planejamento')" id="tab-planejamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🎯 Metas, Dívidas & Reserva</button>
         </nav>
 
-        <div class="flex items-center gap-2">
-            <label class="text-xs text-slate-400">Ano:</label>
-            <select id="globalAno" onchange="reloadAll()" class="rounded px-2 py-1 text-sm font-semibold">
-                <option value="2025">2025</option>
-                <option value="2026" selected>2026</option>
-                <option value="2027">2027</option>
+        <!-- Linha do tempo global: janela de 12 meses que pode começar em qualquer mês -->
+        <div class="flex flex-wrap items-center gap-1.5" title="Use as setas (ou Alt+← / Alt+→) para puxar ou empurrar a linha do tempo">
+            <label class="text-xs text-slate-400 mr-1">Início:</label>
+            <button type="button" onclick="deslocarPeriodo(-12)" class="px-1.5 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Voltar 12 meses">«</button>
+            <button type="button" onclick="deslocarPeriodo(-1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Voltar 1 mês">◀</button>
+            <select id="globalMesInicio" onchange="aoMudarPeriodo()" class="rounded px-2 py-1 text-sm font-semibold">
+                <option value="1">Jan</option><option value="2">Fev</option><option value="3">Mar</option>
+                <option value="4">Abr</option><option value="5">Mai</option><option value="6">Jun</option>
+                <option value="7">Jul</option><option value="8">Ago</option><option value="9">Set</option>
+                <option value="10">Out</option><option value="11">Nov</option><option value="12">Dez</option>
             </select>
+            <select id="globalAno" onchange="aoMudarPeriodo()" class="rounded px-2 py-1 text-sm font-semibold"></select>
+            <button type="button" onclick="deslocarPeriodo(1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Avançar 1 mês">▶</button>
+            <button type="button" onclick="deslocarPeriodo(12)" class="px-1.5 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Avançar 12 meses">»</button>
+            <button type="button" onclick="periodoHoje()" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700" title="Começar no mês atual">Hoje</button>
+            <button type="button" onclick="periodoAnoCivil()" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Janeiro a Dezembro do ano selecionado">Jan–Dez</button>
+            <span id="lblPeriodo" class="text-xs font-mono text-slate-400 ml-1"></span>
         </div>
     </header>
 
@@ -58,17 +68,17 @@
             <!-- KPI Cards -->
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <span class="text-xs uppercase text-slate-400 font-semibold">Receita Anual</span>
+                    <span class="text-xs uppercase text-slate-400 font-semibold">Receita (12 meses)</span>
                     <div id="kpi-receita" class="text-2xl font-bold text-emerald-400 mt-1">R$ 0,00</div>
-                    <span class="text-xs text-slate-500">Acumulado no ano</span>
+                    <span class="text-xs text-slate-500">Acumulado no período</span>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <span class="text-xs uppercase text-slate-400 font-semibold">Despesa Anual</span>
+                    <span class="text-xs uppercase text-slate-400 font-semibold">Despesa (12 meses)</span>
                     <div id="kpi-despesa" class="text-2xl font-bold text-rose-400 mt-1">R$ 0,00</div>
                     <span class="text-xs text-slate-500">Saídas totais</span>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <span class="text-xs uppercase text-slate-400 font-semibold">Saldo Líquido Anual</span>
+                    <span class="text-xs uppercase text-slate-400 font-semibold">Saldo Líquido (12 meses)</span>
                     <div id="kpi-saldo" class="text-2xl font-bold text-sky-400 mt-1">R$ 0,00</div>
                     <span id="kpi-poupado" class="text-xs text-slate-400">0% poupado</span>
                 </div>
@@ -103,7 +113,7 @@
             <!-- Tabela Visão Geral Anual (Idêntica à aba Dashboard da planilha) -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
                 <div class="px-4 py-3 border-b border-slate-800 flex justify-between items-center">
-                    <h2 class="text-sm font-semibold text-white">📊 Visão Geral Anual — Indicadores Calculados Automaticamente</h2>
+                    <h2 class="text-sm font-semibold text-white">📊 Visão Geral (12 meses) — Indicadores Calculados Automaticamente</h2>
                     <span class="text-xs text-slate-400">Valores em R$</span>
                 </div>
                 <div class="overflow-x-auto">
@@ -111,8 +121,7 @@
                         <thead>
                             <tr class="bg-slate-800/70 text-slate-300 border-b border-slate-700 text-right">
                                 <th class="text-left">Indicador</th>
-                                <th>Jan</th><th>Fev</th><th>Mar</th><th>Abr</th><th>Mai</th><th>Jun</th>
-                                <th>Jul</th><th>Ago</th><th>Set</th><th>Out</th><th>Nov</th><th>Dez</th>
+                                <th data-meses-janela class="hidden"></th>
                                 <th class="bg-slate-800 text-white">TOTAL / ACUM</th>
                             </tr>
                         </thead>
@@ -216,13 +225,7 @@
                 <div class="flex flex-wrap items-center gap-3">
                     <div>
                         <label class="text-xs text-slate-400 mr-1">Mês:</label>
-                        <select id="filtroMes" onchange="carregarLancamentos()" class="rounded px-2.5 py-1 text-sm">
-                            <option value="">Todos</option>
-                            <option value="1">Janeiro</option><option value="2">Fevereiro</option><option value="3">Março</option>
-                            <option value="4">Abril</option><option value="5">Maio</option><option value="6">Junho</option>
-                            <option value="7">Julho</option><option value="8">Agosto</option><option value="9">Setembro</option>
-                            <option value="10">Outubro</option><option value="11">Novembro</option><option value="12">Dezembro</option>
-                        </select>
+                        <select id="filtroMes" onchange="carregarLancamentos()" class="rounded px-2.5 py-1 text-sm"></select>
                     </div>
                     <div>
                         <label class="text-xs text-slate-400 mr-1">Tipo:</label>
@@ -401,9 +404,8 @@
                         <thead>
                             <tr class="bg-slate-800 text-slate-300 text-right">
                                 <th class="text-left">Categoria</th>
-                                <th>Jan</th><th>Fev</th><th>Mar</th><th>Abr</th><th>Mai</th><th>Jun</th>
-                                <th>Jul</th><th>Ago</th><th>Set</th><th>Out</th><th>Nov</th><th>Dez</th>
-                                <th class="bg-slate-700 text-white">TOTAL ANO</th>
+                                <th data-meses-janela class="hidden"></th>
+                                <th class="bg-slate-700 text-white">TOTAL 12 MESES</th>
                             </tr>
                         </thead>
                         <tbody id="tbody-resumo-matriz" class="divide-y divide-slate-800 text-right"></tbody>
@@ -423,16 +425,7 @@
                 </div>
                 <div class="flex items-center gap-2">
                     <label class="text-xs text-slate-400">Visualizar Mês em Detalhe:</label>
-                    <select id="orcMesSelect" onchange="renderizarOrcamento()" class="rounded px-2.5 py-1 text-sm font-semibold">
-                        <option value="7">Julho</option>
-                        <option value="8" selected>Agosto</option>
-                        <option value="9">Setembro</option>
-                        <option value="10">Outubro</option>
-                        <option value="11">Novembro</option>
-                        <option value="12">Dezembro</option>
-                        <option value="1">Janeiro</option><option value="2">Fevereiro</option><option value="3">Março</option>
-                        <option value="4">Abril</option><option value="5">Maio</option><option value="6">Junho</option>
-                    </select>
+                    <select id="orcMesSelect" onchange="renderizarOrcamento()" class="rounded px-2.5 py-1 text-sm font-semibold"></select>
                 </div>
             </div>
 
@@ -445,9 +438,9 @@
                                 <th class="text-sky-400">Orçado no Mês (Editável)</th>
                                 <th>Realizado no Mês</th>
                                 <th>Diferença Mês (Real - Orç)</th>
-                                <th class="border-l border-slate-700">Total Orçado Ano</th>
-                                <th>Total Realizado Ano</th>
-                                <th>Variação Anual</th>
+                                <th class="border-l border-slate-700">Total Orçado (12 meses)</th>
+                                <th>Total Realizado (12 meses)</th>
+                                <th>Variação (12 meses)</th>
                             </tr>
                         </thead>
                         <tbody id="tbody-orcamento" class="divide-y divide-slate-800 text-right"></tbody>
@@ -683,6 +676,137 @@
     <script>
         let categoriasCache = [];
         let lancamentosCache = [];
+
+        // ==========================================
+        // LINHA DO TEMPO (janela móvel de 12 meses)
+        // ==========================================
+        const MESES_ABREV = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+        const MESES_NOME = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+        const STORAGE_PERIODO = 'fin.periodoInicio';
+        let periodosAtuais = [];
+
+        // Monta as 12 posições da janela (mesma regra do backend)
+        function calcularPeriodos(ano, mesInicio) {
+            return Array.from({ length: 12 }, (_, i) => {
+                const t = mesInicio - 1 + i;
+                const a = ano + Math.floor(t / 12), m = (t % 12) + 1;
+                return { pos: i + 1, ano: a, mes: m, label: `${MESES_ABREV[m - 1]}/${String(a).slice(2)}`,
+                         chave: `${a}-${String(m).padStart(2, '0')}` };
+            });
+        }
+
+        function getPeriodoInicio() {
+            return {
+                ano: parseInt(document.getElementById('globalAno').value, 10),
+                mes_inicio: parseInt(document.getElementById('globalMesInicio').value, 10)
+            };
+        }
+
+        const qsPeriodo = () => { const p = getPeriodoInicio(); return `ano=${p.ano}&mes_inicio=${p.mes_inicio}`; };
+
+        function garantirOpcaoAno(ano) {
+            const sel = document.getElementById('globalAno');
+            const anos = new Set([...sel.options].map(o => parseInt(o.value, 10)));
+            const hoje = new Date().getFullYear();
+            for (let a = Math.min(hoje - 3, ano); a <= Math.max(hoje + 3, ano); a++) anos.add(a);
+            const ordenados = [...anos].sort((x, y) => x - y);
+            if (ordenados.length !== sel.options.length) {
+                sel.innerHTML = ordenados.map(a => `<option value="${a}">${a}</option>`).join('');
+            }
+        }
+
+        function definirPeriodo(ano, mesInicio, recarregar = true) {
+            garantirOpcaoAno(ano);
+            document.getElementById('globalAno').value = ano;
+            document.getElementById('globalMesInicio').value = mesInicio;
+            aoMudarPeriodo(recarregar);
+        }
+
+        // Puxa (negativo) ou empurra (positivo) a linha do tempo em N meses
+        function deslocarPeriodo(meses) {
+            const { ano, mes_inicio } = getPeriodoInicio();
+            const t = ano * 12 + (mes_inicio - 1) + meses;
+            definirPeriodo(Math.floor(t / 12), (t % 12) + 1);
+        }
+
+        function periodoHoje() {
+            const d = new Date();
+            definirPeriodo(d.getFullYear(), d.getMonth() + 1);
+        }
+
+        function periodoAnoCivil() {
+            definirPeriodo(getPeriodoInicio().ano, 1);
+        }
+
+        function aoMudarPeriodo(recarregar = true) {
+            const { ano, mes_inicio } = getPeriodoInicio();
+            periodosAtuais = calcularPeriodos(ano, mes_inicio);
+            try { localStorage.setItem(STORAGE_PERIODO, JSON.stringify({ ano, mes_inicio })); } catch (e) {}
+
+            const ini = periodosAtuais[0], fim = periodosAtuais[11];
+            const txt = `${ini.label} → ${fim.label}`;
+            document.getElementById('lblPeriodo').textContent = txt;
+            document.getElementById('lblPeriodoSub').textContent = txt;
+
+            renderizarCabecalhosMeses();
+            popularSelectsPeriodo();
+            if (recarregar) reloadAll();
+        }
+
+        // Cabeçalhos de mês das tabelas seguem a janela; meses do ano seguinte ganham destaque
+        function renderizarCabecalhosMeses() {
+            document.querySelectorAll('[data-meses-janela]').forEach(marcador => {
+                const tr = marcador.parentElement;
+                tr.querySelectorAll('[data-mes-gerado]').forEach(th => th.remove());
+                const anoBase = periodosAtuais[0].ano;
+                periodosAtuais.forEach(p => {
+                    const th = document.createElement('th');
+                    th.dataset.mesGerado = '1';
+                    th.title = `${MESES_NOME[p.mes - 1]} de ${p.ano}`;
+                    th.innerHTML = p.ano !== anoBase
+                        ? `${MESES_ABREV[p.mes - 1]}<span class="block text-[10px] text-sky-400 font-normal">${p.ano}</span>`
+                        : `${MESES_ABREV[p.mes - 1]}<span class="block text-[10px] text-slate-500 font-normal">${p.ano}</span>`;
+                    tr.insertBefore(th, marcador);
+                });
+            });
+        }
+
+        // Selects de mês (Lançamentos e Orçamento) listam os 12 meses da janela, mantendo a escolha quando possível
+        function popularSelectsPeriodo() {
+            const selMes = document.getElementById('filtroMes');
+            const antes = selMes.value;
+            selMes.innerHTML = '<option value="">Todos (12 meses)</option>'
+                + periodosAtuais.map(p => `<option value="${p.chave}">${MESES_NOME[p.mes - 1]} ${p.ano}</option>`).join('');
+            selMes.value = periodosAtuais.some(p => p.chave === antes) ? antes : '';
+
+            const selOrc = document.getElementById('orcMesSelect');
+            const chaveAntes = selOrc.selectedOptions[0]?.dataset.chave;
+            const d = new Date();
+            const chaveHoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            selOrc.innerHTML = periodosAtuais.map(p =>
+                `<option value="${p.pos}" data-chave="${p.chave}">${MESES_NOME[p.mes - 1]} ${p.ano}</option>`).join('');
+            const alvo = periodosAtuais.find(p => p.chave === chaveAntes)
+                || periodosAtuais.find(p => p.chave === chaveHoje)
+                || periodosAtuais[0];
+            selOrc.value = alvo.pos;
+        }
+
+        function restaurarPeriodoSalvo() {
+            let salvo = null;
+            try { salvo = JSON.parse(localStorage.getItem(STORAGE_PERIODO) || 'null'); } catch (e) {}
+            if (salvo && salvo.ano && salvo.mes_inicio >= 1 && salvo.mes_inicio <= 12) {
+                definirPeriodo(salvo.ano, salvo.mes_inicio, false);
+            } else {
+                definirPeriodo(new Date().getFullYear(), 1, false);
+            }
+        }
+
+        // Atalhos de teclado: Alt+← / Alt+→ puxam/empurram a linha do tempo
+        document.addEventListener('keydown', (e) => {
+            if (!e.altKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
+            if (e.key === 'ArrowLeft') { e.preventDefault(); deslocarPeriodo(-1); }
+            if (e.key === 'ArrowRight') { e.preventDefault(); deslocarPeriodo(1); }
+        });
         let lancamentoExcluirId = null;
         let dashboardCache = null;
         let orcamentoCache = [];
@@ -725,6 +849,7 @@
         async function initApp() {
             document.getElementById('inpData').value = new Date().toISOString().split('T')[0];
             atualizarMacrosNovoForm();
+            restaurarPeriodoSalvo();
             await reloadAll();
         }
 
@@ -1101,8 +1226,7 @@
 
         // 1. Carregar Dashboard e Matriz de Receitas/Despesas
         async function carregarDashboard() {
-            const ano = document.getElementById('globalAno').value;
-            const res = await fetch(`/api/dashboard?ano=${ano}`);
+            const res = await fetch(`/api/dashboard?${qsPeriodo()}`);
             const data = await res.json();
             dashboardCache = data;
 
@@ -1110,7 +1234,7 @@
             document.getElementById('kpi-receita').textContent = fmtBRL(data.kpis.total_receita);
             document.getElementById('kpi-despesa').textContent = fmtBRL(data.kpis.total_despesa);
             document.getElementById('kpi-saldo').textContent = fmtBRL(data.kpis.saldo_anual);
-            document.getElementById('kpi-poupado').textContent = `${data.kpis.pct_poupado_anual}% da receita poupada no ano`;
+            document.getElementById('kpi-poupado').textContent = `${data.kpis.pct_poupado_anual}% da receita poupada no período`;
             document.getElementById('kpi-investido').textContent = fmtBRL(data.kpis.total_investido);
             document.getElementById('kpi-reserva').textContent = fmtBRL(data.kpis.saldo_reserva);
 
@@ -1147,7 +1271,7 @@
         }
 
         function renderizarGraficosDashboard(data) {
-            const labels = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+            const labels = data.periodos.map(p => p.label);
             const recData = labels.map((_, i) => data.series_mensais.receitas[i+1]);
             const despData = labels.map((_, i) => data.series_mensais.despesas[i+1]);
             const acumData = labels.map((_, i) => data.series_mensais.saldo_acumulado[i+1]);
@@ -1219,13 +1343,13 @@
 
         // 2. Carregar e Salvar Lançamentos
         async function carregarLancamentos() {
-            const ano = document.getElementById('globalAno').value;
-            const mes = document.getElementById('filtroMes').value;
+            const { ano, mes_inicio } = getPeriodoInicio();
+            const periodo = document.getElementById('filtroMes').value;
             const tipo = document.getElementById('filtroTipo').value;
             const busca = document.getElementById('filtroBusca').value;
 
-            const params = new URLSearchParams({ ano });
-            if (mes) params.append('mes', mes);
+            const params = new URLSearchParams({ ano, mes_inicio });
+            if (periodo) params.append('periodo', periodo);
             if (tipo) params.append('tipo', tipo);
             if (busca) params.append('busca', busca);
             const recorrencia = document.getElementById('filtroRecorrencia').value;
@@ -1308,10 +1432,10 @@
                 atualizarCamposRecorrencia();
                 await reloadAll();
                 if (out.quantidade > 1) {
-                    const anoAtual = document.getElementById('globalAno').value;
-                    const foraDoAno = out.ultima_data.slice(0, 4) !== anoAtual;
+                    const ini = periodosAtuais[0].chave, fim = periodosAtuais[11].chave;
+                    const foraDaJanela = out.primeira_data.slice(0, 7) < ini || out.ultima_data.slice(0, 7) > fim;
                     alert(`${out.quantidade} lançamentos gerados de ${fmtData(out.primeira_data)} até ${fmtData(out.ultima_data)}.`
-                        + (foraDoAno ? '\n\nAlgumas ocorrências caem em outro ano — troque o ano no topo para vê-las.' : ''));
+                        + (foraDaJanela ? '\n\nAlgumas ocorrências ficam fora do período exibido — use ◀ ▶ no topo para puxar ou empurrar a linha do tempo.' : ''));
                 }
             } else {
                 const err = await res.json();
@@ -1381,14 +1505,14 @@
 
         // 3. Orçamento vs Realizado
         async function carregarOrcamento() {
-            const ano = document.getElementById('globalAno').value;
-            const res = await fetch(`/api/orcamento?ano=${ano}`);
-            orcamentoCache = await res.json();
+            const res = await fetch(`/api/orcamento?${qsPeriodo()}`);
+            const data = await res.json();
+            orcamentoCache = data.linhas;
             renderizarOrcamento();
         }
 
         function renderizarOrcamento() {
-            const mes = parseInt(document.getElementById('orcMesSelect').value);
+            const mes = parseInt(document.getElementById('orcMesSelect').value); // posição na janela (1..12)
             const tbody = document.getElementById('tbody-orcamento');
 
             tbody.innerHTML = orcamentoCache.map(row => {
@@ -1413,8 +1537,8 @@
             }).join('');
         }
 
-        async function salvarValorOrcado(macro, mes, valor) {
-            const ano = parseInt(document.getElementById('globalAno').value);
+        async function salvarValorOrcado(macro, pos, valor) {
+            const { ano, mes } = periodosAtuais[pos - 1];
             await fetch('/api/orcamento', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1425,8 +1549,7 @@
 
         // 4. Planejamento: Reserva, Metas, Investimentos e Dívidas
         async function carregarPlanejamento() {
-            const ano = document.getElementById('globalAno').value;
-            const res = await fetch(`/api/planejamento?ano=${ano}`);
+            const res = await fetch(`/api/planejamento?${qsPeriodo()}`);
             const data = await res.json();
 
             // Reserva
