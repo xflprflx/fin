@@ -179,6 +179,7 @@ def init_db():
         ("cartao_id", "INTEGER"),
         ("financiamento_id", "INTEGER"),
         ("amortizacao_id", "INTEGER"),
+        ("valor_previsto", "REAL"),
     ):
         if col not in colunas_lanc:
             cur.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {ddl}")
@@ -372,6 +373,19 @@ class TRMensalInput(BaseModel):
 
 class TRProjetadaInput(BaseModel):
     tr_anual_pct: float = Field(..., ge=TR_ANUAL_MIN, le=TR_ANUAL_MAX, description="TR projetada em % ao ano")
+
+
+class LancamentoUpdateInput(BaseModel):
+    data: str = Field(..., description="YYYY-MM-DD")
+    tipo: str = Field(..., pattern="^(Receita|Despesa)$")
+    categoria: str = Field(..., min_length=1)
+    descricao: Optional[str] = ""
+    valor: float = Field(..., gt=0)
+    forma_pgto: str = "PIX"
+    observacao: Optional[str] = ""
+    cartao_id: Optional[int] = None
+    escopo: str = Field(default="unico", pattern="^(unico|futuros|todos)$")
+    restaurar_previsto: bool = Field(default=False, description="Volta o valor ao previsto (descarta o ajuste)")
 
 
 class AmortizacaoInput(BaseModel):
@@ -748,29 +762,47 @@ def _cronograma(conn, fin: dict, amortizacoes: Optional[List[dict]] = None) -> L
     return calcular_sac_tr(fin, _tr_reais(conn, fin["id"]), amort)
 
 
-def _sincronizar_lancamentos_financiamento(conn, fin: dict) -> List[dict]:
+def _sincronizar_lancamentos_financiamento(conn, fin: dict, atualizar_contrato: bool = False) -> List[dict]:
     """
     Recalcula o cronograma e alinha as prestações lançadas:
       - atualiza valor, observação e total de parcelas das existentes;
+        prestações ajustadas manualmente (valor_previsto preenchido) mantêm o valor pago
+        e só têm o valor previsto atualizado;
       - remove as que deixaram de existir (prazo reduzido / quitação);
       - cria as que voltaram a existir além da última lançada (ex.: amortização desfeita).
+    Com atualizar_contrato=True (edição do contrato), também atualiza data, categoria,
+    descrição e forma de pagamento.
     Prestações excluídas manualmente no meio da série não são recriadas.
     """
     cron = _cronograma(conn, fin)
     por_n = {l["n"]: l for l in cron}
     total = len(cron)
     existentes = conn.execute(
-        "SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ? AND amortizacao_id IS NULL",
+        "SELECT id, parcela_num, valor_previsto FROM lancamentos WHERE financiamento_id = ? AND amortizacao_id IS NULL",
         (fin["id"],)).fetchall()
     max_n = 0
     for row in existentes:
         l = por_n.get(row["parcela_num"])
-        if l:
+        if not l:
+            conn.execute("DELETE FROM lancamentos WHERE id = ?", (row["id"],))
+            continue
+        max_n = max(max_n, row["parcela_num"])
+        if row["valor_previsto"] is not None:
+            conn.execute("UPDATE lancamentos SET valor_previsto = ?, parcela_total = ? WHERE id = ?",
+                         (l["prestacao"], total, row["id"]))
+        else:
             conn.execute("UPDATE lancamentos SET valor = ?, observacao = ?, parcela_total = ? WHERE id = ?",
                          (l["prestacao"], _obs_parcela(l), total, row["id"]))
-            max_n = max(max_n, row["parcela_num"])
-        else:
-            conn.execute("DELETE FROM lancamentos WHERE id = ?", (row["id"],))
+        if atualizar_contrato:
+            conn.execute(
+                """UPDATE lancamentos SET data = ?, mes = ?, ano = ?, competencia = ?, categoria = ?,
+                   descricao = ?, forma_pgto = ? WHERE id = ?""",
+                (l["data"], l["mes"], l["ano"], f"{l['mes']:02d}/{l['ano']}", fin["categoria"],
+                 f"Financiamento {fin['nome']}", fin["forma_pgto"], row["id"]),
+            )
+    if atualizar_contrato:
+        conn.execute("UPDATE lancamentos SET categoria = ?, forma_pgto = ? WHERE amortizacao_id IS NOT NULL AND financiamento_id = ?",
+                     (fin["categoria"], fin["forma_pgto"], fin["id"]))
     a_partir = fin.get("lancar_a_partir_de") or (cron[0]["data"][:7] if cron else "9999-12")
     if existentes:
         for l in cron:
@@ -1127,6 +1159,161 @@ def criar_lancamento(payload: LancamentoInput):
         "primeira_competencia": "%04d-%02d" % periodos_contabeis[0],
         "ultima_competencia": "%04d-%02d" % periodos_contabeis[-1],
     }
+
+
+@app.get("/api/lancamentos/{lanc_id}")
+def obter_lancamento(lanc_id: int):
+    """Retorna um lançamento (com nome do cartão e modo da série) para o formulário de edição."""
+    conn = get_db_connection()
+    row = conn.execute(
+        """
+        SELECT l.*, k.nome AS cartao_nome, r.modo AS modo_serie
+        FROM lancamentos l
+        LEFT JOIN cartoes k ON k.id = l.cartao_id
+        LEFT JOIN recorrencias r ON r.id = l.recorrencia_id
+        WHERE l.id = ?
+        """,
+        (lanc_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
+    return dict(row)
+
+
+@app.put("/api/lancamentos/{lanc_id}")
+def atualizar_lancamento(lanc_id: int, payload: LancamentoUpdateInput):
+    """
+    Edita um lançamento. Em séries (recorrências e parcelamentos), `escopo` define o alcance:
+    unico (só este), futuros (este e os próximos) ou todos. Ao mudar a data numa série, todas as
+    ocorrências do escopo são deslocadas pela mesma diferença de dias.
+
+    O primeiro ajuste de valor guarda o valor original em `valor_previsto`, para comparar previsto x real
+    (descontos, juros, reajustes). `restaurar_previsto` desfaz o ajuste.
+
+    Casos especiais:
+      - prestação de financiamento: só o próprio lançamento; o valor ajustado não é sobrescrito por recálculos;
+      - pagamento de amortização extra: altera a amortização (data/valor) e recalcula o financiamento;
+      - compra no cartão: mudar data ou cartão recalcula a fatura.
+    """
+    try:
+        nova_data = datetime.strptime(payload.data, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
+
+    conn = get_db_connection()
+    lanc = conn.execute("SELECT * FROM lancamentos WHERE id = ?", (lanc_id,)).fetchone()
+    if not lanc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
+    lanc = dict(lanc)
+    descricao = (payload.descricao or "").strip()
+    observacao = (payload.observacao or "").strip()
+    valor = round(payload.valor, 2)
+
+    # --- Pagamento de amortização extraordinária ---
+    if lanc["amortizacao_id"] and lanc["financiamento_id"]:
+        fin = _obter_financiamento(conn, lanc["financiamento_id"])
+        amort = conn.execute("SELECT * FROM financiamento_amortizacoes WHERE id = ?", (lanc["amortizacao_id"],)).fetchone()
+        outras = [a for a in _amortizacoes(conn, fin["id"]) if a["id"] != lanc["amortizacao_id"]]
+        base = _cronograma(conn, fin, outras)
+        entrada = AmortizacaoInput(data=payload.data, valor=valor, modo=amort["modo"])
+        _validar_amortizacao(conn, fin, entrada, base)
+        _gravar_amortizacao(conn, fin, amort["id"], payload.data, valor, amort["modo"])
+        conn.execute("UPDATE lancamentos SET categoria = ?, descricao = ?, forma_pgto = ? WHERE id = ?",
+                     (payload.categoria, descricao, payload.forma_pgto, lanc_id))
+        _sincronizar_lancamentos_financiamento(conn, fin)
+        conn.commit()
+        conn.close()
+        return {"status": "ok", "atualizados": 1}
+
+    # --- Cartão ---
+    cartao = None
+    forma_pgto = payload.forma_pgto
+    if payload.cartao_id is not None and payload.forma_pgto == "Crédito":
+        cartao = conn.execute("SELECT * FROM cartoes WHERE id = ?", (payload.cartao_id,)).fetchone()
+        if not cartao:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Cartão não encontrado.")
+        if payload.tipo != "Despesa":
+            conn.close()
+            raise HTTPException(status_code=400, detail="Compras no cartão devem ser do tipo Despesa.")
+    cartao_id = cartao["id"] if cartao else None
+
+    # --- Prestação de financiamento: só este lançamento ---
+    eh_prestacao = bool(lanc["financiamento_id"])
+    if eh_prestacao:
+        if payload.tipo != "Despesa" or cartao_id:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Prestação de financiamento deve ser Despesa e sem cartão.")
+        escopo = "unico"
+    else:
+        escopo = payload.escopo if lanc["recorrencia_id"] else "unico"
+
+    # Linhas afetadas
+    if escopo == "unico":
+        linhas = [lanc]
+    elif escopo == "futuros":
+        linhas = [dict(r) for r in conn.execute(
+            "SELECT * FROM lancamentos WHERE recorrencia_id = ? AND parcela_num >= ? ORDER BY parcela_num",
+            (lanc["recorrencia_id"], lanc["parcela_num"])).fetchall()]
+    else:
+        linhas = [dict(r) for r in conn.execute(
+            "SELECT * FROM lancamentos WHERE recorrencia_id = ? ORDER BY parcela_num",
+            (lanc["recorrencia_id"],)).fetchall()]
+
+    modo_serie = None
+    if lanc["recorrencia_id"]:
+        rec = conn.execute("SELECT modo FROM recorrencias WHERE id = ?", (lanc["recorrencia_id"],)).fetchone()
+        modo_serie = rec["modo"] if rec else None
+
+    delta = nova_data - datetime.strptime(lanc["data"], "%Y-%m-%d").date()
+    for row in linhas:
+        d_antiga = datetime.strptime(row["data"], "%Y-%m-%d").date()
+        d_nova = nova_data if row["id"] == lanc_id else d_antiga + delta
+        mudou_data = d_nova != d_antiga
+        mudou_cartao = cartao_id != row["cartao_id"]
+        if cartao is not None and (mudou_data or mudou_cartao):
+            if modo_serie == "parcelar" and row["parcela_num"]:
+                base = fatura_da_compra(cartao, d_nova)
+                ano_c, mes_c = mover_mes(base[0], base[1], row["parcela_num"] - 1)
+            else:
+                ano_c, mes_c = fatura_da_compra(cartao, d_nova)
+        elif cartao is None and (mudou_data or row["cartao_id"] is not None):
+            ano_c, mes_c = d_nova.year, d_nova.month
+        else:
+            ano_c, mes_c = row["ano"], row["mes"]
+
+        if payload.restaurar_previsto and row["valor_previsto"] is not None:
+            novo_valor, previsto = row["valor_previsto"], None
+        elif payload.restaurar_previsto:
+            novo_valor, previsto = row["valor"], None
+        else:
+            novo_valor = valor
+            previsto = row["valor_previsto"]
+            if previsto is None and abs(novo_valor - row["valor"]) >= 0.005:
+                previsto = row["valor"]
+            if previsto is not None and abs(novo_valor - previsto) < 0.005:
+                previsto = None  # voltou ao previsto
+
+        conn.execute(
+            """
+            UPDATE lancamentos SET data = ?, mes = ?, ano = ?, competencia = ?, tipo = ?, categoria = ?,
+                descricao = ?, valor = ?, valor_previsto = ?, forma_pgto = ?, observacao = ?, cartao_id = ?
+            WHERE id = ?
+            """,
+            (d_nova.isoformat(), mes_c, ano_c, f"{mes_c:02d}/{ano_c}", payload.tipo, payload.categoria, descricao,
+             novo_valor, previsto, forma_pgto, observacao, cartao_id, row["id"]),
+        )
+
+    # Prestação restaurada volta a seguir o cronograma
+    if eh_prestacao and payload.restaurar_previsto:
+        fin = _obter_financiamento(conn, lanc["financiamento_id"])
+        _sincronizar_lancamentos_financiamento(conn, fin)
+
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "atualizados": len(linhas)}
 
 
 @app.delete("/api/lancamentos/{lanc_id}")
@@ -1499,12 +1686,15 @@ def obter_financiamento(fin_id: int):
     amortizacoes = _amortizacoes(conn, fin_id)
     cron = _cronograma(conn, fin, amortizacoes)
     sem_extra = _cronograma(conn, fin, [])
-    lancadas = {r["parcela_num"]: r["id"] for r in conn.execute(
-        "SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ? AND amortizacao_id IS NULL",
+    lancadas = {r["parcela_num"]: dict(r) for r in conn.execute(
+        "SELECT id, parcela_num, valor, valor_previsto FROM lancamentos WHERE financiamento_id = ? AND amortizacao_id IS NULL",
         (fin_id,)).fetchall()}
     conn.close()
     for l in cron:
-        l["lancamento_id"] = lancadas.get(l["n"])
+        lanc = lancadas.get(l["n"])
+        l["lancamento_id"] = lanc["id"] if lanc else None
+        l["valor_lancado"] = lanc["valor"] if lanc else None
+        l["ajustado"] = bool(lanc and lanc["valor_previsto"] is not None)
     resumo = resumo_financiamento(fin, cron)
     resumo_sem = resumo_financiamento(fin, sem_extra)
     return {
@@ -1625,6 +1815,65 @@ def excluir_amortizacao(fin_id: int, amort_id: int):
     conn.commit()
     conn.close()
     return {"status": "deleted", "id": amort_id}
+
+
+@app.put("/api/financiamentos/{fin_id}")
+def atualizar_financiamento(fin_id: int, payload: FinanciamentoInput):
+    """
+    Edita o contrato (nome, valores, taxa, prazo, datas, seguros, taxas, TR projetada, categoria, forma de pgto)
+    e recalcula todas as prestações lançadas. Prestações com valor ajustado manualmente mantêm o valor pago.
+    O mês a partir do qual as prestações são lançadas não muda.
+    """
+    dados = _validar_financiamento(payload)
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    campos = ["nome", "valor_financiado", "taxa_juros_anual", "tipo_taxa", "prazo_meses", "data_primeira_parcela",
+              "tr_projetada", "seguro_mensal", "taxa_adm_mensal", "categoria", "forma_pgto"]
+    for c in campos:
+        fin[c] = dados[c]
+    conn.execute(
+        f"UPDATE financiamentos SET {', '.join(f'{c} = ?' for c in campos)} WHERE id = ?",
+        [fin[c] for c in campos] + [fin_id],
+    )
+    conn.execute("UPDATE lancamentos SET descricao = ? WHERE amortizacao_id IS NOT NULL AND financiamento_id = ?",
+                 (f"Amortização extra {fin['nome']}", fin_id))
+    cron = _sincronizar_lancamentos_financiamento(conn, fin, atualizar_contrato=True)
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "id": fin_id, "parcelas_total": len(cron)}
+
+
+@app.put("/api/financiamentos/{fin_id}/amortizacoes/{amort_id}")
+def atualizar_amortizacao(fin_id: int, amort_id: int, payload: AmortizacaoInput):
+    """Edita data, valor ou modo de uma amortização extraordinária e recalcula as prestações."""
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    if not conn.execute("SELECT id FROM financiamento_amortizacoes WHERE id = ? AND financiamento_id = ?",
+                        (amort_id, fin_id)).fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Amortização não encontrada.")
+    outras = [a for a in _amortizacoes(conn, fin_id) if a["id"] != amort_id]
+    base = _cronograma(conn, fin, outras)
+    _validar_amortizacao(conn, fin, payload, base)
+    _gravar_amortizacao(conn, fin, amort_id, payload.data, payload.valor, payload.modo)
+    cron = _sincronizar_lancamentos_financiamento(conn, fin)
+    efeito = _comparar_amortizacao(fin, base, cron, payload.data)
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "id": amort_id, **efeito}
+
+
+def _gravar_amortizacao(conn, fin: dict, amort_id: int, data_str: str, valor: float, modo: str):
+    """Atualiza a amortização e o lançamento do pagamento extra correspondente."""
+    d = datetime.strptime(data_str, "%Y-%m-%d").date()
+    conn.execute("UPDATE financiamento_amortizacoes SET data = ?, valor = ?, modo = ? WHERE id = ?",
+                 (data_str, round(valor, 2), modo, amort_id))
+    conn.execute(
+        """UPDATE lancamentos SET data = ?, mes = ?, ano = ?, competencia = ?, valor = ?, observacao = ?
+           WHERE amortizacao_id = ?""",
+        (data_str, d.month, d.year, f"{d.month:02d}/{d.year}", round(valor, 2),
+         "Reduz prazo" if modo == "prazo" else "Reduz parcela", amort_id),
+    )
 
 
 @app.put("/api/financiamentos/{fin_id}/tr")

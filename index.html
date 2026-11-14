@@ -422,10 +422,11 @@
             <!-- Cadastro / simulação -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
                 <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-                    <h2 class="text-sm font-semibold text-sky-400 uppercase tracking-wider">➕ Novo Financiamento — SAC / TR (Sistema de Amortização Constante)</h2>
+                    <h2 id="tituloFormFin" class="text-sm font-semibold text-sky-400 uppercase tracking-wider">➕ Novo Financiamento — SAC / TR (Sistema de Amortização Constante)</h2>
                     <span class="text-xs text-slate-400">Cada prestação vira uma despesa mensal; TR real pode ser informada depois</span>
                 </div>
                 <form id="formFinanciamento" onsubmit="salvarFinanciamento(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+                    <input type="hidden" id="finEditId">
                     <div class="lg:col-span-2">
                         <label class="block text-xs text-slate-400 mb-1">Nome / Contrato *</label>
                         <input type="text" id="finNome" required placeholder="Ex: Apartamento - Caixa" class="w-full rounded px-3 py-1.5 text-sm">
@@ -485,7 +486,8 @@
                     </div>
                     <div class="sm:col-span-2 lg:col-span-6 flex flex-wrap justify-end gap-2 pt-1">
                         <button type="button" onclick="simularFinanciamento()" class="px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 transition">🔍 Simular</button>
-                        <button type="submit" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm transition">💾 Cadastrar e gerar lançamentos</button>
+                        <button type="button" id="btnCancelarEdicaoFin" onclick="cancelarEdicaoFinanciamento()" class="hidden px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700">Cancelar edição</button>
+                        <button type="submit" id="btnSalvarFin" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm transition">💾 Cadastrar e gerar lançamentos</button>
                     </div>
                 </form>
                 <div id="simulacaoFinanciamento" class="hidden mt-4 space-y-3"></div>
@@ -515,6 +517,7 @@
                         <span id="efeitoAmortizacoes" class="text-xs text-slate-400"></span>
                     </div>
                     <form id="formAmortizacao" onsubmit="registrarAmortizacao(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+                        <input type="hidden" id="amoEditId">
                         <div>
                             <label class="block text-xs text-slate-400 mb-1">Data do pagamento *</label>
                             <input type="date" id="amoData" required class="w-full rounded px-3 py-1.5 text-sm">
@@ -531,8 +534,9 @@
                             </div>
                         </div>
                         <div class="lg:col-span-2 flex gap-2 justify-end">
-                            <button type="button" onclick="simularAmortizacao()" class="px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">🔍 Simular</button>
-                            <button type="submit" class="px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950">💾 Registrar amortização</button>
+                            <button type="button" id="btnCancelarAmo" onclick="cancelarEdicaoAmortizacao()" class="hidden px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700">Cancelar</button>
+                            <button type="button" id="btnSimularAmo" onclick="simularAmortizacao()" class="px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">🔍 Simular</button>
+                            <button type="submit" id="btnSalvarAmo" class="px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950">💾 Registrar amortização</button>
                         </div>
                     </form>
                     <div id="resultadoAmortizacao" class="hidden"></div>
@@ -919,6 +923,77 @@
                     <button type="submit" class="px-5 py-2 rounded text-sm font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 transition">
                         ➕ Cadastrar e Selecionar
                     </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de Edição de Lançamento -->
+    <div id="modalEditarLancamento" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-base font-semibold text-white">✏️ Editar lançamento</h3>
+                <button type="button" onclick="fecharModalEditarLancamento()" class="text-slate-400 hover:text-white text-lg">✕</button>
+            </div>
+            <div id="edLancInfo" class="text-xs text-slate-400 mb-3"></div>
+            <form id="formEditarLancamento" onsubmit="salvarEdicaoLancamento(event)" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <input type="hidden" id="edLancId">
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Data *</label>
+                    <input type="date" id="edLancData" required class="w-full rounded px-3 py-1.5 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
+                    <select id="edLancTipo" onchange="atualizarCamposEdicaoLanc()" class="w-full rounded px-3 py-1.5 text-sm">
+                        <option value="Despesa">🔻 Despesa</option>
+                        <option value="Receita">🔺 Receita</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Categoria *</label>
+                    <select id="edLancCategoria" required class="w-full rounded px-3 py-1.5 text-sm"></select>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Descrição</label>
+                    <input type="text" id="edLancDescricao" class="w-full rounded px-3 py-1.5 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Valor real (R$) *</label>
+                    <input type="number" id="edLancValor" required min="0.01" step="0.01" oninput="atualizarDiffEdicaoLanc()" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    <div id="edLancPrevisto" class="text-[11px] mt-1"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Forma pgto</label>
+                        <select id="edLancFormaPgto" onchange="atualizarCamposEdicaoLanc()" class="w-full rounded px-2 py-1.5 text-sm">
+                            <option value="PIX">PIX</option><option value="Crédito">Crédito</option><option value="Débito">Débito</option>
+                            <option value="Transferência">Transferência</option><option value="Boleto">Boleto</option>
+                        </select>
+                    </div>
+                    <div id="edLancBoxCartao">
+                        <label class="block text-xs text-slate-400 mb-1">Cartão</label>
+                        <select id="edLancCartao" class="w-full rounded px-2 py-1.5 text-sm"></select>
+                    </div>
+                </div>
+                <div class="sm:col-span-2">
+                    <label class="block text-xs text-slate-400 mb-1">Observação</label>
+                    <input type="text" id="edLancObs" class="w-full rounded px-3 py-1.5 text-sm">
+                </div>
+                <div id="edLancBoxEscopo" class="sm:col-span-2 hidden">
+                    <label class="block text-xs text-slate-400 mb-1">Aplicar a</label>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+                        <label class="flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 cursor-pointer"><input type="radio" name="edLancEscopo" value="unico" checked> Só este</label>
+                        <label class="flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 cursor-pointer"><input type="radio" name="edLancEscopo" value="futuros"> Este e os próximos</label>
+                        <label class="flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 cursor-pointer"><input type="radio" name="edLancEscopo" value="todos"> Todos da série</label>
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-1">Mudar a data desloca as ocorrências escolhidas pela mesma quantidade de dias. O valor informado vale para cada ocorrência.</p>
+                </div>
+                <div class="sm:col-span-2 flex flex-wrap justify-between gap-2 pt-3 border-t border-slate-800">
+                    <button type="button" id="btnRestaurarPrevisto" onclick="salvarEdicaoLancamento(null, true)" class="hidden px-3 py-2 rounded text-sm text-amber-300 bg-slate-800 hover:bg-slate-700 border border-slate-700">↺ Restaurar valor previsto</button>
+                    <div class="flex gap-2 ml-auto">
+                        <button type="button" onclick="fecharModalEditarLancamento()" class="px-4 py-2 rounded text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700">Cancelar</button>
+                        <button type="submit" class="px-5 py-2 rounded text-sm font-semibold text-slate-950 bg-sky-500 hover:bg-sky-400">💾 Salvar</button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -1659,11 +1734,12 @@
                     <td class="text-white font-medium">${r.descricao}${r.recorrencia_id
                         ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300" title="${r.financiamento_id ? 'Prestação de financiamento' : 'Lançamento recorrente'}">${r.financiamento_id ? '🏠' : '🔁'} ${r.parcela_num}/${r.parcela_total}</span>`
                         : r.amortizacao_id ? ' <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300" title="Amortização extraordinária de financiamento">💰 extra</span>' : ''}</td>
-                    <td class="text-right font-mono ${valCls}">${fmtBRL(r.valor)}</td>
+                    <td class="text-right font-mono ${valCls}">${fmtBRL(r.valor)}${diffPrevistoHtml(r)}</td>
                     <td class="text-slate-300 text-xs">${r.forma_pgto}${r.cartao_nome ? ` <span class="text-violet-300">· 💳 ${r.cartao_nome}</span>` : ''}</td>
                     <td class="text-slate-400 text-xs">${r.observacao}</td>
-                    <td class="text-center">
-                        <button onclick="removerLancamento(${r.id})" class="text-slate-500 hover:text-rose-400 px-2 py-0.5 text-xs transition" title="Excluir">🗑️</button>
+                    <td class="text-center whitespace-nowrap">
+                        <button onclick="abrirEdicaoLancamento(${r.id})" class="text-slate-500 hover:text-sky-400 px-1.5 py-0.5 text-xs transition" title="Editar">✏️</button>
+                        <button onclick="removerLancamento(${r.id})" class="text-slate-500 hover:text-rose-400 px-1.5 py-0.5 text-xs transition" title="Excluir">🗑️</button>
                     </td>
                 </tr>`;
             }).join('');
@@ -1796,6 +1872,121 @@
                 + `<strong class="text-white">${fmtBRL(porOcorrencia)}</strong> `
                 + `(total <strong class="text-white">${fmtBRL(total)}</strong>).`
                 + (cartaoSelecionadoNoForm() && modo === 'parcelar' ? ' Uma parcela em cada fatura seguinte.' : '');
+        }
+
+        // ==========================================
+        // EDIÇÃO DE LANÇAMENTOS (previsto x real)
+        // ==========================================
+        let lancEmEdicao = null;
+
+        // Mostra a diferença entre o valor real e o previsto (desconto / aumento)
+        function diffPrevistoHtml(r) {
+            if (r.valor_previsto == null) return '';
+            const dif = r.valor - r.valor_previsto;
+            const pct = r.valor_previsto ? (dif / r.valor_previsto) * 100 : 0;
+            const favoravel = r.tipo === 'Receita' ? dif > 0 : dif < 0;
+            const sinal = dif > 0 ? '+' : '−';
+            return `<div class="text-[10px] font-normal ${favoravel ? 'text-emerald-400' : 'text-amber-300'}" title="Valor ajustado em relação ao previsto">
+                prev. ${fmtBRL(r.valor_previsto)} (${sinal}${Math.abs(pct).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%)</div>`;
+        }
+
+        async function abrirEdicaoLancamento(id) {
+            const res = await fetch(`/api/lancamentos/${id}`);
+            if (!res.ok) { alert('Lançamento não encontrado.'); return; }
+            const l = await res.json();
+            lancEmEdicao = l;
+            document.getElementById('edLancId').value = l.id;
+            document.getElementById('edLancData').value = l.data;
+            document.getElementById('edLancTipo').value = l.tipo;
+            document.getElementById('edLancDescricao').value = l.descricao || '';
+            document.getElementById('edLancValor').value = l.valor;
+            document.getElementById('edLancFormaPgto').value = l.forma_pgto || 'PIX';
+            document.getElementById('edLancObs').value = l.observacao || '';
+            document.getElementById('edLancCartao').innerHTML = cartoesCache.map(c => `<option value="${c.id}">${escHtml(c.nome)}</option>`).join('')
+                + '<option value="">— Sem cartão —</option>';
+            document.getElementById('edLancCartao').value = l.cartao_id ?? '';
+            document.querySelector('input[name="edLancEscopo"][value="unico"]').checked = true;
+
+            const ehPrestacao = l.financiamento_id && !l.amortizacao_id;
+            const ehAmortizacao = !!l.amortizacao_id;
+            const ehSerie = !!l.recorrencia_id && !ehPrestacao;
+            document.getElementById('edLancBoxEscopo').classList.toggle('hidden', !ehSerie);
+            ['edLancTipo'].forEach(i => document.getElementById(i).disabled = ehPrestacao || ehAmortizacao);
+
+            let info = '';
+            if (ehPrestacao) info = `🏠 Prestação ${l.parcela_num}/${l.parcela_total} de financiamento. Ajuste o valor se o boleto veio com desconto ou acréscimo: o valor pago fica fixo e não é sobrescrito por recálculos de TR ou amortização.`;
+            else if (ehAmortizacao) info = '💰 Pagamento de amortização extraordinária: mudar data ou valor recalcula as prestações do financiamento.';
+            else if (ehSerie) info = `🔁 Ocorrência ${l.parcela_num}/${l.parcela_total} de uma série${l.modo_serie === 'parcelar' ? ' parcelada' : ''}.`;
+            if (l.cartao_id) info += ` 💳 Compra no ${escHtml(l.cartao_nome || 'cartão')} — fatura ${String(l.mes).padStart(2, '0')}/${l.ano}; mudar data ou cartão recalcula a fatura.`;
+            document.getElementById('edLancInfo').innerHTML = info;
+
+            atualizarCamposEdicaoLanc();
+            document.getElementById('edLancCategoria').value = l.categoria;
+            if (document.getElementById('edLancCategoria').value !== l.categoria) {
+                // categoria antiga que não existe mais no cadastro: mantém disponível
+                document.getElementById('edLancCategoria').insertAdjacentHTML('afterbegin', `<option value="${escHtml(l.categoria)}">${escHtml(l.categoria)} (não cadastrada)</option>`);
+                document.getElementById('edLancCategoria').value = l.categoria;
+            }
+            atualizarDiffEdicaoLanc();
+            document.getElementById('modalEditarLancamento').classList.remove('hidden');
+        }
+
+        function atualizarCamposEdicaoLanc() {
+            const tipo = document.getElementById('edLancTipo').value;
+            const sel = document.getElementById('edLancCategoria');
+            const antes = sel.value;
+            sel.innerHTML = categoriasCache.filter(c => c.tipo === tipo).map(c => `<option value="${escHtml(c.nome)}">${escHtml(c.nome)}</option>`).join('');
+            if (antes) sel.value = antes;
+            const ehPrestacao = lancEmEdicao && lancEmEdicao.financiamento_id && !lancEmEdicao.amortizacao_id;
+            const credito = document.getElementById('edLancFormaPgto').value === 'Crédito' && tipo === 'Despesa' && !ehPrestacao && cartoesCache.length;
+            document.getElementById('edLancBoxCartao').classList.toggle('invisible', !credito);
+        }
+
+        function atualizarDiffEdicaoLanc() {
+            const l = lancEmEdicao;
+            const el = document.getElementById('edLancPrevisto');
+            const btn = document.getElementById('btnRestaurarPrevisto');
+            const previsto = l.valor_previsto != null ? l.valor_previsto : l.valor;
+            const atual = parseFloat(document.getElementById('edLancValor').value || 0);
+            btn.classList.toggle('hidden', l.valor_previsto == null);
+            if (Math.abs(atual - previsto) < 0.005) {
+                el.innerHTML = l.valor_previsto == null ? '<span class="text-slate-500">Valor igual ao previsto</span>' : '<span class="text-slate-500">Igual ao previsto (o ajuste será removido)</span>';
+                return;
+            }
+            const dif = atual - previsto, pct = previsto ? dif / previsto * 100 : 0;
+            const favoravel = document.getElementById('edLancTipo').value === 'Receita' ? dif > 0 : dif < 0;
+            el.innerHTML = `<span class="${favoravel ? 'text-emerald-400' : 'text-amber-300'}">Previsto ${fmtBRL(previsto)} → ${dif < 0 ? 'desconto' : 'acréscimo'} de ${fmtBRL(Math.abs(dif))} (${Math.abs(pct).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%)</span>`;
+        }
+
+        function fecharModalEditarLancamento() {
+            lancEmEdicao = null;
+            document.getElementById('modalEditarLancamento').classList.add('hidden');
+        }
+
+        async function salvarEdicaoLancamento(e, restaurar = false) {
+            if (e) e.preventDefault();
+            const id = document.getElementById('edLancId').value;
+            const forma = document.getElementById('edLancFormaPgto').value;
+            const cartaoVal = document.getElementById('edLancCartao').value;
+            const usaCartao = !document.getElementById('edLancBoxCartao').classList.contains('invisible') && forma === 'Crédito' && cartaoVal;
+            const payload = {
+                data: document.getElementById('edLancData').value,
+                tipo: document.getElementById('edLancTipo').value,
+                categoria: document.getElementById('edLancCategoria').value,
+                descricao: document.getElementById('edLancDescricao').value,
+                valor: parseFloat(document.getElementById('edLancValor').value),
+                forma_pgto: forma,
+                observacao: document.getElementById('edLancObs').value,
+                cartao_id: usaCartao ? parseInt(cartaoVal, 10) : null,
+                escopo: document.querySelector('input[name="edLancEscopo"]:checked').value,
+                restaurar_previsto: restaurar
+            };
+            const res = await fetch(`/api/lancamentos/${id}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            if (!res.ok) { alert('Erro ao salvar: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            fecharModalEditarLancamento();
+            await reloadAll();
         }
 
         // ==========================================
@@ -2066,8 +2257,8 @@
                     <td class="text-white">${escHtml(i.descricao)}</td>
                     <td class="text-slate-300 text-xs">${escHtml(i.categoria)}</td>
                     <td class="text-center">${i.parcela_total ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300">${i.parcela_num}/${i.parcela_total}</span>` : '<span class="text-slate-600 text-xs">à vista</span>'}</td>
-                    <td class="text-right font-mono text-rose-400 font-semibold">${fmtBRL(i.valor)}</td>
-                    <td class="text-center"><button onclick="removerLancamento(${i.id})" class="text-slate-500 hover:text-rose-400 px-2 py-0.5 text-xs" title="Excluir">🗑️</button></td>
+                    <td class="text-right font-mono text-rose-400 font-semibold">${fmtBRL(i.valor)}${diffPrevistoHtml(i)}</td>
+                    <td class="text-center whitespace-nowrap"><button onclick="abrirEdicaoLancamento(${i.id})" class="text-slate-500 hover:text-sky-400 px-1.5 py-0.5 text-xs" title="Editar">✏️</button><button onclick="removerLancamento(${i.id})" class="text-slate-500 hover:text-rose-400 px-1.5 py-0.5 text-xs" title="Excluir">🗑️</button></td>
                 </tr>`).join('')
                 : '<tr><td colspan="6" class="text-center text-slate-500 py-6">Nenhuma compra nesta fatura.</td></tr>';
 
@@ -2228,8 +2419,59 @@
             box.classList.remove('hidden');
         }
 
+        function editarFinanciamento(id) {
+            const f = financiamentosCache.find(x => x.id === id);
+            if (!f) return;
+            document.getElementById('finEditId').value = f.id;
+            document.getElementById('finNome').value = f.nome;
+            document.getElementById('finValor').value = f.valor_financiado;
+            document.getElementById('finTaxa').value = f.taxa_juros_anual;
+            document.getElementById('finTipoTaxa').value = f.tipo_taxa;
+            document.getElementById('finPrazo').value = f.prazo_meses;
+            document.getElementById('finData').value = f.data_primeira_parcela;
+            document.getElementById('finTR').value = Number(f.tr_projetada_anual.toFixed(4));
+            document.getElementById('finSeguro').value = f.seguro_mensal;
+            document.getElementById('finAdm').value = f.taxa_adm_mensal;
+            document.getElementById('finCategoria').value = f.categoria;
+            document.getElementById('finFormaPgto').value = f.forma_pgto;
+            const aPartir = document.getElementById('finAPartir');
+            aPartir.value = f.lancar_a_partir_de || '';
+            aPartir.disabled = true;
+            aPartir.title = 'Não pode ser alterado depois do cadastro';
+            atualizarHintTR();
+            document.getElementById('tituloFormFin').textContent = `✏️ Editando contrato: ${f.nome}`;
+            document.getElementById('btnSalvarFin').textContent = '💾 Salvar e recalcular prestações';
+            document.getElementById('btnCancelarEdicaoFin').classList.remove('hidden');
+            document.getElementById('simulacaoFinanciamento').classList.add('hidden');
+            document.getElementById('formFinanciamento').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function cancelarEdicaoFinanciamento() {
+            document.getElementById('formFinanciamento').reset();
+            document.getElementById('finEditId').value = '';
+            const aPartir = document.getElementById('finAPartir');
+            aPartir.disabled = false; aPartir.title = '';
+            document.getElementById('tituloFormFin').textContent = '➕ Novo Financiamento — SAC / TR (Sistema de Amortização Constante)';
+            document.getElementById('btnSalvarFin').textContent = '💾 Cadastrar e gerar lançamentos';
+            document.getElementById('btnCancelarEdicaoFin').classList.add('hidden');
+            document.getElementById('simulacaoFinanciamento').classList.add('hidden');
+            atualizarHintTR();
+            popularCategoriasFinanciamento();
+        }
+
         async function salvarFinanciamento(e) {
             e.preventDefault();
+            const editId = document.getElementById('finEditId').value;
+            if (editId) {
+                const res = await fetch(`/api/financiamentos/${editId}`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadFinanciamento())
+                });
+                if (!res.ok) { alert('Erro ao salvar: ' + msgErro(await res.json().catch(() => ({})))); return; }
+                cancelarEdicaoFinanciamento();
+                await reloadAll();
+                await abrirCronograma(parseInt(editId, 10));
+                return;
+            }
             const res = await fetch('/api/financiamentos', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadFinanciamento())
             });
@@ -2268,6 +2510,7 @@
                             </div>
                             <div class="flex gap-1 shrink-0">
                                 <button onclick="abrirCronograma(${f.id})" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">📅 Cronograma</button>
+                                <button onclick="editarFinanciamento(${f.id})" class="text-slate-400 hover:text-sky-400 p-1 rounded hover:bg-slate-800" title="Editar contrato">✏️</button>
                                 <button onclick="excluirFinanciamento(${f.id})" class="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800" title="Excluir">🗑️</button>
                             </div>
                         </div>
@@ -2351,7 +2594,9 @@
                     <td class="font-mono font-semibold ${passada ? '' : 'text-white'}">${fmtNum(l.prestacao)}</td>
                     <td class="font-mono ${l.amortizacao_extra + l.amortizacao_extra_antes > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-600'}">${l.amortizacao_extra + l.amortizacao_extra_antes > 0 ? fmtNum(l.amortizacao_extra + l.amortizacao_extra_antes) : '—'}</td>
                     <td class="font-mono">${fmtNum(l.saldo_devedor)}</td>
-                    <td class="text-center text-xs">${l.lancamento_id ? '✓' : '<span class="text-slate-600">—</span>'}</td>
+                    <td class="text-center text-xs whitespace-nowrap">${l.lancamento_id
+                        ? `<button onclick="abrirEdicaoLancamento(${l.lancamento_id})" class="hover:text-sky-400" title="${l.ajustado ? `Valor pago ajustado (previsto ${fmtBRL(l.prestacao)}) — clique para editar` : 'Lançada — clique para editar o valor pago'}">${l.ajustado ? `<span class="text-amber-300 font-mono">✎ ${fmtNum(l.valor_lancado)}</span>` : '✓ ✏️'}</button>`
+                        : '<span class="text-slate-600">—</span>'}</td>
                 </tr>`;
             }).join('');
         }
@@ -2375,7 +2620,10 @@
             document.getElementById('listaAmortizacoes').innerHTML = f.amortizacoes.map(a => `
                 <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded bg-slate-800/50 text-xs">
                     <span><span class="font-mono text-slate-300">${fmtData(a.data)}</span> • <strong class="text-emerald-300">${fmtBRL(a.valor)}</strong> • reduz ${a.modo === 'prazo' ? 'prazo' : 'parcela'}</span>
-                    <button onclick="excluirAmortizacao(${a.id})" class="text-slate-400 hover:text-rose-400" title="Desfazer amortização">🗑️ desfazer</button>
+                    <span class="flex gap-3">
+                        <button onclick="editarAmortizacao(${a.id})" class="text-slate-400 hover:text-sky-400" title="Editar amortização">✏️ editar</button>
+                        <button onclick="excluirAmortizacao(${a.id})" class="text-slate-400 hover:text-rose-400" title="Desfazer amortização">🗑️ desfazer</button>
+                    </span>
                 </div>`).join('');
         }
 
@@ -2411,11 +2659,35 @@
             box.classList.remove('hidden');
         }
 
+        function editarAmortizacao(id) {
+            const a = cronogramaAtual.amortizacoes.find(x => x.id === id);
+            if (!a) return;
+            document.getElementById('amoEditId').value = a.id;
+            document.getElementById('amoData').value = a.data;
+            document.getElementById('amoValor').value = a.valor;
+            document.querySelector(`input[name="amoModo"][value="${a.modo}"]`).checked = true;
+            document.getElementById('btnSalvarAmo').textContent = '💾 Salvar alteração';
+            document.getElementById('btnCancelarAmo').classList.remove('hidden');
+            document.getElementById('btnSimularAmo').classList.add('hidden');
+            document.getElementById('resultadoAmortizacao').classList.add('hidden');
+            document.getElementById('formAmortizacao').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function cancelarEdicaoAmortizacao() {
+            document.getElementById('amoEditId').value = '';
+            document.getElementById('amoValor').value = '';
+            document.getElementById('btnSalvarAmo').textContent = '💾 Registrar amortização';
+            document.getElementById('btnCancelarAmo').classList.add('hidden');
+            document.getElementById('btnSimularAmo').classList.remove('hidden');
+        }
+
         async function registrarAmortizacao(e) {
             e.preventDefault();
-            const res = await fetch(`/api/financiamentos/${cronogramaAtual.id}/amortizacoes`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadAmortizacao())
+            const editId = document.getElementById('amoEditId').value;
+            const res = await fetch(`/api/financiamentos/${cronogramaAtual.id}/amortizacoes${editId ? '/' + editId : ''}`, {
+                method: editId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadAmortizacao())
             });
+            if (res.ok && editId) cancelarEdicaoAmortizacao();
             if (!res.ok) { alert('Erro ao registrar: ' + msgErro(await res.json().catch(() => ({})))); return; }
             const efeito = await res.json();
             document.getElementById('amoValor').value = '';
