@@ -454,8 +454,9 @@
                         <input type="date" id="finData" required class="w-full rounded px-3 py-1.5 text-sm">
                     </div>
                     <div>
-                        <label class="block text-xs text-slate-400 mb-1" title="TR mensal usada nos meses em que a TR real ainda não foi informada">TR mensal projetada (%)</label>
-                        <input type="number" id="finTR" min="-5" max="5" step="0.0001" value="0" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                        <label class="block text-xs text-slate-400 mb-1" title="TR usada nos meses em que a TR real ainda não foi informada. Informe AO ANO (ex.: 1,8); o sistema converte para a taxa mensal equivalente.">TR projetada (% <strong class="text-slate-200">ao ano</strong>)</label>
+                        <input type="number" id="finTR" min="-5" max="20" step="0.0001" value="0" oninput="atualizarHintTR()" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                        <div id="finTRHint" class="text-[11px] text-slate-500 mt-0.5">= 0% ao mês • bancos projetam com TR 0</div>
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Seguros MIP+DFI (R$/mês)</label>
@@ -495,7 +496,7 @@
                 <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap gap-3 justify-between items-center">
                     <div>
                         <h2 id="tituloCronograma" class="text-sm font-semibold text-white">📅 Cronograma</h2>
-                        <p class="text-xs text-slate-400">Digite a TR real do mês na coluna TR para recalcular. Em branco = TR projetada.</p>
+                        <p class="text-xs text-slate-400">Digite a TR real <strong>do mês</strong> (% a.m., ex.: 0,17) na coluna TR para recalcular. Em branco = TR projetada.</p>
                     </div>
                     <div class="flex items-center gap-2">
                         <label class="text-xs text-slate-400">Mostrar:</label>
@@ -505,13 +506,46 @@
                         </select>
                     </div>
                 </div>
+                <div id="avisoCronograma" class="hidden"></div>
+
+                <!-- Amortização extraordinária -->
+                <div class="px-4 py-4 border-b border-slate-800 space-y-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="text-sm font-semibold text-emerald-400">💰 Amortização extraordinária</h3>
+                        <span id="efeitoAmortizacoes" class="text-xs text-slate-400"></span>
+                    </div>
+                    <form id="formAmortizacao" onsubmit="registrarAmortizacao(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">Data do pagamento *</label>
+                            <input type="date" id="amoData" required class="w-full rounded px-3 py-1.5 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">Valor (R$) *</label>
+                            <input type="number" id="amoValor" required min="0.01" step="0.01" placeholder="0.00" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                        </div>
+                        <div class="lg:col-span-2">
+                            <label class="block text-xs text-slate-400 mb-1">O que reduzir *</label>
+                            <div class="flex gap-2">
+                                <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 text-sm cursor-pointer"><input type="radio" name="amoModo" value="prazo" checked> Prazo <span class="text-[11px] text-slate-500">(paga menos juros)</span></label>
+                                <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 text-sm cursor-pointer"><input type="radio" name="amoModo" value="parcela"> Parcela</label>
+                            </div>
+                        </div>
+                        <div class="lg:col-span-2 flex gap-2 justify-end">
+                            <button type="button" onclick="simularAmortizacao()" class="px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">🔍 Simular</button>
+                            <button type="submit" class="px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950">💾 Registrar amortização</button>
+                        </div>
+                    </form>
+                    <div id="resultadoAmortizacao" class="hidden"></div>
+                    <div id="listaAmortizacoes" class="space-y-1"></div>
+                </div>
+
                 <div class="overflow-auto max-h-[560px]">
                     <table class="w-full text-left border-collapse table-compact">
                         <thead class="bg-slate-800 text-slate-300 sticky top-0 z-10 text-right">
                             <tr>
-                                <th class="text-center">Nº</th><th class="text-left">Vencimento</th><th>TR (%)</th>
+                                <th class="text-center">Nº</th><th class="text-left">Vencimento</th><th>TR (% a.m.)</th>
                                 <th>Saldo inicial</th><th>Correção TR</th><th>Amortização</th><th>Juros</th>
-                                <th>Seg.+Adm.</th><th class="text-white">Prestação</th><th>Saldo devedor</th><th class="text-center">Lançada</th>
+                                <th>Seg.+Adm.</th><th class="text-white">Prestação</th><th class="text-emerald-400">Amort. extra</th><th>Saldo devedor</th><th class="text-center">Lançada</th>
                             </tr>
                         </thead>
                         <tbody id="tbody-cronograma" class="divide-y divide-slate-800 text-right"></tbody>
@@ -1624,7 +1658,7 @@
                     <td class="text-slate-200">${r.categoria}</td>
                     <td class="text-white font-medium">${r.descricao}${r.recorrencia_id
                         ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300" title="${r.financiamento_id ? 'Prestação de financiamento' : 'Lançamento recorrente'}">${r.financiamento_id ? '🏠' : '🔁'} ${r.parcela_num}/${r.parcela_total}</span>`
-                        : ''}</td>
+                        : r.amortizacao_id ? ' <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300" title="Amortização extraordinária de financiamento">💰 extra</span>' : ''}</td>
                     <td class="text-right font-mono ${valCls}">${fmtBRL(r.valor)}</td>
                     <td class="text-slate-300 text-xs">${r.forma_pgto}${r.cartao_nome ? ` <span class="text-violet-300">· 💳 ${r.cartao_nome}</span>` : ''}</td>
                     <td class="text-slate-400 text-xs">${r.observacao}</td>
@@ -1699,6 +1733,12 @@
 
         async function removerLancamento(id) {
             const lanc = lancamentosCache.find(l => l.id === id) || (faturaAtualCache?.itens || []).find(l => l.id === id);
+            if (lanc && lanc.amortizacao_id) {
+                if (!confirm('Este lançamento é uma amortização extraordinária.\n\nExcluí-lo desfaz a amortização e recalcula as prestações do financiamento. Continuar?')) return;
+                await fetch(`/api/lancamentos/${id}`, { method: 'DELETE' });
+                await reloadAll();
+                return;
+            }
             if (lanc && lanc.recorrencia_id) {
                 lancamentoExcluirId = id;
                 document.getElementById('txtExcluirRecorrente').textContent =
@@ -2114,7 +2154,7 @@
                 tipo_taxa: document.getElementById('finTipoTaxa').value,
                 prazo_meses: parseInt(document.getElementById('finPrazo').value, 10),
                 data_primeira_parcela: document.getElementById('finData').value,
-                tr_projetada: parseFloat(document.getElementById('finTR').value || 0),
+                tr_projetada_anual: parseFloat(document.getElementById('finTR').value || 0),
                 seguro_mensal: parseFloat(document.getElementById('finSeguro').value || 0),
                 taxa_adm_mensal: parseFloat(document.getElementById('finAdm').value || 0),
                 categoria: document.getElementById('finCategoria').value,
@@ -2125,6 +2165,29 @@
 
         const msgErro = (err) => typeof err.detail === 'string' ? err.detail
             : Array.isArray(err.detail) ? err.detail.map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join('\n') : 'verifique os campos.';
+
+        const trAnualParaMensal = (a) => (Math.pow(1 + (a || 0) / 100, 1 / 12) - 1) * 100;
+
+        function atualizarHintTR() {
+            const a = parseFloat(document.getElementById('finTR').value || 0);
+            const m = trAnualParaMensal(a);
+            const el = document.getElementById('finTRHint');
+            el.textContent = `= ${fmtPct(m)} ao mês` + (a === 0 ? ' • bancos projetam com TR 0' : '');
+            el.className = 'text-[11px] mt-0.5 ' + (a > 5 ? 'text-amber-300' : 'text-slate-500');
+            if (a > 5) el.textContent += ' • TR acima de 5% a.a. é muito alta — confira se não é a taxa mensal ×12 ou outra taxa';
+        }
+
+        // Explica quando, no SAC/TR, a prestação sobe (TR mensal acima de i ÷ (1 + i × prazo restante))
+        function avisoPrestacaoSobeHtml(r) {
+            if (!r || !r.prestacao_sobe) return '';
+            const s = r.prestacao_sobe;
+            return `<div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-1">
+                <div class="font-semibold">⚠ A prestação sobe a partir da nº ${s.para_n} (${fmtBRL(s.de)} → ${fmtBRL(s.para)})</div>
+                <div>No SAC/TR, a TR corrige o saldo todo mês. Com TR de <strong>${fmtPct(s.tr_pct)} a.m.</strong>, a correção supera a redução dos juros:
+                para esta taxa e prazo, a prestação só cai se a TR ficar abaixo de ~<strong>${fmtPct(r.tr_limite_inicial_pct)} a.m.</strong> (${fmtPct(r.tr_limite_inicial_anual_pct, 2)} a.a.).</div>
+                <div class="text-amber-300/80">Confira se a TR projetada foi informada <strong>ao ano</strong> e a TR real <strong>ao mês</strong>. Os bancos montam a tabela do contrato com TR = 0.</div>
+            </div>`;
+        }
 
         function resumoCardsHtml(r, valorFinanciado) {
             const card = (lbl, val, cls = 'text-white') => `<div class="bg-slate-800/50 rounded-lg p-3"><span class="text-xs text-slate-400">${lbl}</span><div class="text-base font-bold font-mono ${cls}">${val}</div></div>`;
@@ -2154,6 +2217,7 @@
                 <td class="font-semibold text-white">${fmtNum(l.prestacao)}</td><td class="text-slate-400">${fmtNum(l.saldo_devedor)}</td></tr>`).join('');
             box.innerHTML = `<h3 class="text-xs uppercase text-slate-400 font-semibold">Simulação</h3>
                 ${resumoCardsHtml(data.resumo)}
+                ${avisoPrestacaoSobeHtml(data.resumo)}
                 <div class="overflow-x-auto border border-slate-800 rounded-lg">
                     <table class="w-full border-collapse table-compact text-right">
                         <thead class="bg-slate-800 text-slate-300"><tr><th class="text-center">Nº</th><th class="text-left">Vencimento</th><th>Amortização</th><th>Juros</th><th>Seg.+Adm.</th><th>Prestação</th><th>Saldo devedor</th></tr></thead>
@@ -2172,6 +2236,7 @@
             if (!res.ok) { alert('Erro ao cadastrar: ' + msgErro(await res.json().catch(() => ({})))); return; }
             const out = await res.json();
             document.getElementById('formFinanciamento').reset();
+            atualizarHintTR();
             document.getElementById('simulacaoFinanciamento').classList.add('hidden');
             popularCategoriasFinanciamento();
             await reloadAll();
@@ -2191,14 +2256,14 @@
             } else {
                 el.innerHTML = financiamentosCache.map(f => {
                     const r = f.resumo;
-                    const venc = f.prazo_meses - r.parcelas_restantes;
-                    const pctPrazo = (venc / f.prazo_meses) * 100;
+                    const venc = r.parcelas_pagas, totalParc = r.parcelas_total || f.prazo_meses;
+                    const pctPrazo = (venc / totalParc) * 100;
                     const pctQuitado = Math.max(0, Math.min(100, (1 - r.saldo_devedor_hoje / f.valor_financiado) * 100));
                     const prox = r.proxima_parcela;
                     return `<div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
                         <div class="flex items-start justify-between gap-2">
                             <div>
-                                <div class="text-base font-bold text-white">🏠 ${escHtml(f.nome)}</div>
+                                <div class="text-base font-bold text-white">🏠 ${escHtml(f.nome)}${r.quitado ? ' <span class="ml-1 px-2 py-0.5 rounded-full text-[11px] bg-emerald-500/20 text-emerald-300">Quitado</span>' : ''}</div>
                                 <div class="text-xs text-slate-400">${f.sistema} / ${f.indexador} • ${fmtPct(f.taxa_juros_anual)} a.a. ${f.tipo_taxa} (${fmtPct(r.taxa_mensal_pct)} a.m.) • ${f.prazo_meses} meses • ${fmtBRL(f.valor_financiado)}</div>
                             </div>
                             <div class="flex gap-1 shrink-0">
@@ -2213,14 +2278,17 @@
                             <div class="bg-slate-800/50 rounded-lg p-2.5"><span class="text-[11px] text-slate-400">Total a pagar (proj.)</span><div class="font-bold font-mono text-sky-300">${fmtBRL(r.total_pago)}</div></div>
                         </div>
                         <div class="space-y-1.5">
-                            <div class="flex justify-between text-xs text-slate-400"><span>Prazo: ${venc}/${f.prazo_meses} prestações vencidas</span><span>${pctPrazo.toFixed(1)}%</span></div>
+                            <div class="flex justify-between text-xs text-slate-400"><span>Prazo: ${venc}/${totalParc} prestações vencidas${totalParc < f.prazo_meses ? ` (contrato: ${f.prazo_meses})` : ''}</span><span>${pctPrazo.toFixed(1)}%</span></div>
                             <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden"><div class="h-full bg-sky-500" style="width:${pctPrazo.toFixed(1)}%"></div></div>
                             <div class="flex justify-between text-xs text-slate-400"><span>Dívida quitada</span><span>${pctQuitado.toFixed(1)}%</span></div>
                             <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden"><div class="h-full bg-emerald-500" style="width:${pctQuitado.toFixed(1)}%"></div></div>
                         </div>
+                        ${r.total_amortizacao_extra > 0 ? `<div class="text-xs text-emerald-300">💰 Amortizações extras: ${fmtBRL(r.total_amortizacao_extra)} • término em ${fmtData(r.ultima_data)} (${r.parcelas_total} prestações)</div>` : ''}
+                        ${avisoPrestacaoSobeHtml(r)}
                         <div class="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                            <label>TR projetada (% a.m.):</label>
-                            <input type="number" step="0.0001" min="-5" max="5" value="${f.tr_projetada}" onchange="alterarTRProjetada(${f.id}, this.value)" class="w-24 rounded px-2 py-1 text-xs font-mono">
+                            <label>TR projetada (% a.a.):</label>
+                            <input type="number" step="0.0001" min="-5" max="20" value="${Number(f.tr_projetada_anual.toFixed(4))}" onchange="alterarTRProjetada(${f.id}, this.value)" class="w-24 rounded px-2 py-1 text-xs font-mono">
+                            <span class="text-slate-500">= ${fmtPct(r.tr_projetada_mensal_pct)} a.m.</span>
                             <span class="text-slate-500">• Seg.+Adm. ${fmtBRL(f.seguro_mensal + f.taxa_adm_mensal)}/mês • ${escHtml(f.categoria)}</span>
                         </div>
                     </div>`;
@@ -2239,6 +2307,13 @@
             document.getElementById('tituloCronograma').textContent = `📅 Cronograma — ${cronogramaAtual.nome} (SAC / TR)`;
             document.getElementById('painelCronograma').classList.remove('hidden');
             renderizarCronograma();
+            renderizarAmortizacoes();
+            const aviso = document.getElementById('avisoCronograma');
+            const htmlAviso = avisoPrestacaoSobeHtml(cronogramaAtual.resumo);
+            aviso.innerHTML = htmlAviso ? `<div class="px-4 pt-3">${htmlAviso}</div>` : '';
+            aviso.classList.toggle('hidden', !htmlAviso);
+            const inpData = document.getElementById('amoData');
+            if (!inpData.value) inpData.value = hojeISO();
             if (rolar) {
                 switchTab('financiamentos');
                 document.getElementById('painelCronograma').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2255,7 +2330,7 @@
             if (filtro === 'janela') linhas = linhas.filter(l => l.data.slice(0, 7) >= ini && l.data.slice(0, 7) <= fim);
             const tbody = document.getElementById('tbody-cronograma');
             if (!linhas.length) {
-                tbody.innerHTML = `<tr><td colspan="11" class="text-center text-slate-500 py-6">Nenhuma prestação no período ${periodosAtuais[0].label} → ${periodosAtuais[11].label}. Use ◀ ▶ no topo ou mostre todas.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="12" class="text-center text-slate-500 py-6">Nenhuma prestação no período ${periodosAtuais[0].label} → ${periodosAtuais[11].label}. Use ◀ ▶ no topo ou mostre todas.</td></tr>`;
                 return;
             }
             tbody.innerHTML = linhas.map(l => {
@@ -2274,6 +2349,7 @@
                     <td class="font-mono text-amber-300/90">${fmtNum(l.juros)}</td>
                     <td class="font-mono">${fmtNum(l.seguro + l.taxa_adm)}</td>
                     <td class="font-mono font-semibold ${passada ? '' : 'text-white'}">${fmtNum(l.prestacao)}</td>
+                    <td class="font-mono ${l.amortizacao_extra + l.amortizacao_extra_antes > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-600'}">${l.amortizacao_extra + l.amortizacao_extra_antes > 0 ? fmtNum(l.amortizacao_extra + l.amortizacao_extra_antes) : '—'}</td>
                     <td class="font-mono">${fmtNum(l.saldo_devedor)}</td>
                     <td class="text-center text-xs">${l.lancamento_id ? '✓' : '<span class="text-slate-600">—</span>'}</td>
                 </tr>`;
@@ -2289,9 +2365,76 @@
             await reloadAll();
         }
 
+        function renderizarAmortizacoes() {
+            const f = cronogramaAtual;
+            const ef = f.efeito_amortizacoes;
+            document.getElementById('efeitoAmortizacoes').innerHTML = f.amortizacoes.length
+                ? `Total amortizado: <strong class="text-emerald-300">${fmtBRL(f.resumo.total_amortizacao_extra)}</strong> • economia de juros <strong class="text-emerald-300">${fmtBRL(ef.economia_juros)}</strong>`
+                  + (ef.meses_a_menos > 0 ? ` • <strong class="text-emerald-300">${ef.meses_a_menos} meses a menos</strong> (era ${fmtData(ef.ultima_data_original)}, agora ${fmtData(f.resumo.ultima_data)})` : '')
+                : 'Pagamentos extras abatem o saldo devedor logo após a prestação do mês.';
+            document.getElementById('listaAmortizacoes').innerHTML = f.amortizacoes.map(a => `
+                <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded bg-slate-800/50 text-xs">
+                    <span><span class="font-mono text-slate-300">${fmtData(a.data)}</span> • <strong class="text-emerald-300">${fmtBRL(a.valor)}</strong> • reduz ${a.modo === 'prazo' ? 'prazo' : 'parcela'}</span>
+                    <button onclick="excluirAmortizacao(${a.id})" class="text-slate-400 hover:text-rose-400" title="Desfazer amortização">🗑️ desfazer</button>
+                </div>`).join('');
+        }
+
+        function payloadAmortizacao() {
+            return {
+                data: document.getElementById('amoData').value,
+                valor: parseFloat(document.getElementById('amoValor').value),
+                modo: document.querySelector('input[name="amoModo"]:checked').value
+            };
+        }
+
+        function efeitoAmortizacaoHtml(e, registrada) {
+            const linhas = [];
+            if (e.quita) linhas.push('<strong>Quita o financiamento.</strong>');
+            if (e.meses_a_menos > 0) linhas.push(`Prazo: <strong>${e.parcelas_antes} → ${e.parcelas_depois} prestações</strong> (${e.meses_a_menos} meses a menos; término ${fmtData(e.ultima_data_antes)} → ${fmtData(e.ultima_data_depois)})`);
+            if (!e.quita && e.proxima_prestacao_antes != null) linhas.push(`Próxima prestação (${fmtData(e.proxima_data)}): <strong>${fmtBRL(e.proxima_prestacao_antes)} → ${fmtBRL(e.proxima_prestacao_depois)}</strong>`);
+            linhas.push(`Economia de juros: <strong>${fmtBRL(e.economia_juros)}</strong>`);
+            return `<div class="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-100 space-y-1">
+                <div class="font-semibold text-emerald-300">${registrada ? '✓ Amortização registrada' : '🔍 Simulação da amortização'}</div>
+                ${linhas.map(l => `<div>${l}</div>`).join('')}
+            </div>`;
+        }
+
+        async function simularAmortizacao() {
+            const form = document.getElementById('formAmortizacao');
+            if (!form.reportValidity()) return;
+            const res = await fetch(`/api/financiamentos/${cronogramaAtual.id}/amortizacoes/simular`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadAmortizacao())
+            });
+            const box = document.getElementById('resultadoAmortizacao');
+            if (!res.ok) { alert('Erro: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            box.innerHTML = efeitoAmortizacaoHtml(await res.json(), false);
+            box.classList.remove('hidden');
+        }
+
+        async function registrarAmortizacao(e) {
+            e.preventDefault();
+            const res = await fetch(`/api/financiamentos/${cronogramaAtual.id}/amortizacoes`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadAmortizacao())
+            });
+            if (!res.ok) { alert('Erro ao registrar: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            const efeito = await res.json();
+            document.getElementById('amoValor').value = '';
+            await reloadAll();
+            const box = document.getElementById('resultadoAmortizacao');
+            box.innerHTML = efeitoAmortizacaoHtml(efeito, true);
+            box.classList.remove('hidden');
+        }
+
+        async function excluirAmortizacao(amortId) {
+            if (!confirm('Desfazer esta amortização? O lançamento do pagamento extra será removido e as prestações recalculadas.')) return;
+            await fetch(`/api/financiamentos/${cronogramaAtual.id}/amortizacoes/${amortId}`, { method: 'DELETE' });
+            document.getElementById('resultadoAmortizacao').classList.add('hidden');
+            await reloadAll();
+        }
+
         async function alterarTRProjetada(id, valor) {
             const res = await fetch(`/api/financiamentos/${id}/tr-projetada`, {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tr_pct: parseFloat(valor || 0) })
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tr_anual_pct: parseFloat(valor || 0) })
             });
             if (!res.ok) { alert('Erro ao salvar TR projetada: ' + msgErro(await res.json().catch(() => ({})))); }
             await reloadAll();

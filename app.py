@@ -7,6 +7,7 @@ import os
 import sqlite3
 import json
 import calendar
+import math
 import uuid
 from datetime import datetime, date, timedelta
 from typing import Optional, List
@@ -107,6 +108,15 @@ def init_db():
             criado_em TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS financiamento_amortizacoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            financiamento_id INTEGER NOT NULL,
+            data TEXT NOT NULL,
+            valor REAL NOT NULL,
+            modo TEXT NOT NULL,
+            criado_em TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS financiamento_tr (
             financiamento_id INTEGER NOT NULL,
             ano INTEGER NOT NULL,
@@ -168,6 +178,7 @@ def init_db():
         ("parcela_total", "INTEGER"),
         ("cartao_id", "INTEGER"),
         ("financiamento_id", "INTEGER"),
+        ("amortizacao_id", "INTEGER"),
     ):
         if col not in colunas_lanc:
             cur.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {ddl}")
@@ -328,6 +339,9 @@ class CartaoInput(BaseModel):
     limite: float = Field(default=0.0, ge=0)
 
 
+TR_ANUAL_MIN, TR_ANUAL_MAX = -5.0, 20.0
+
+
 class FinanciamentoInput(BaseModel):
     nome: str = Field(..., min_length=1, description="Ex.: Apartamento - Caixa")
     valor_financiado: float = Field(..., gt=0)
@@ -335,7 +349,10 @@ class FinanciamentoInput(BaseModel):
     tipo_taxa: str = Field(default="efetiva", pattern="^(efetiva|nominal)$")
     prazo_meses: int = Field(..., ge=1, le=600)
     data_primeira_parcela: str = Field(..., description="YYYY-MM-DD")
-    tr_projetada: float = Field(default=0.0, ge=-5, le=5, description="TR mensal projetada em % (ex.: 0.08)")
+    tr_projetada_anual: float = Field(
+        default=0.0, ge=TR_ANUAL_MIN, le=TR_ANUAL_MAX,
+        description="TR projetada em % AO ANO (ex.: 1.8); convertida para a taxa mensal equivalente",
+    )
     seguro_mensal: float = Field(default=0.0, ge=0, description="MIP + DFI em R$/mês")
     taxa_adm_mensal: float = Field(default=0.0, ge=0, description="Taxa de administração em R$/mês")
     categoria: str = Field(default="Juros e Empréstimos")
@@ -348,11 +365,19 @@ class FinanciamentoInput(BaseModel):
 class TRMensalInput(BaseModel):
     ano: int
     mes: int = Field(..., ge=1, le=12)
-    tr_pct: Optional[float] = Field(default=None, ge=-5, le=5, description="TR real do mês em %; null remove")
+    tr_pct: Optional[float] = Field(
+        default=None, ge=-1, le=1, description="TR real do MÊS em % (ex.: 0.17); null remove"
+    )
 
 
 class TRProjetadaInput(BaseModel):
-    tr_pct: float = Field(..., ge=-5, le=5)
+    tr_anual_pct: float = Field(..., ge=TR_ANUAL_MIN, le=TR_ANUAL_MAX, description="TR projetada em % ao ano")
+
+
+class AmortizacaoInput(BaseModel):
+    data: str = Field(..., description="YYYY-MM-DD do pagamento extra")
+    valor: float = Field(..., gt=0)
+    modo: str = Field(..., pattern="^(prazo|parcela)$", description="prazo = reduz prazo; parcela = reduz prestação")
 
 
 class PagamentoFaturaInput(BaseModel):
@@ -542,15 +567,29 @@ def taxa_mensal(taxa_anual_pct: float, tipo: str) -> float:
     return (1 + i) ** (1 / 12) - 1 if tipo == "efetiva" else i / 12
 
 
-def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None) -> List[dict]:
+def tr_anual_para_mensal(tr_anual_pct: float) -> float:
+    """TR anual (%) -> TR mensal equivalente (%)."""
+    return ((1 + tr_anual_pct / 100) ** (1 / 12) - 1) * 100
+
+
+def tr_mensal_para_anual(tr_mensal_pct: float) -> float:
+    return ((1 + tr_mensal_pct / 100) ** 12 - 1) * 100
+
+
+def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None, amortizacoes: Optional[List[dict]] = None) -> List[dict]:
     """
-    Gera o cronograma SAC corrigido pela TR. A cada mês k (1..n):
-      saldo corrigido = saldo anterior × (1 + TR do mês)
-      amortização     = saldo corrigido ÷ (n − k + 1)     (constante quando TR = 0)
+    Gera o cronograma SAC corrigido pela TR. A cada mês k:
+      saldo corrigido = saldo anterior × (1 + TR mensal)
+      amortização     = saldo corrigido ÷ prestações restantes
       juros           = saldo corrigido × taxa mensal
       prestação       = amortização + juros + seguros + taxa de administração
       novo saldo      = saldo corrigido − amortização
-    TR real informada para o mês substitui a TR projetada.
+    TR real informada para o mês substitui a TR projetada (fin["tr_projetada"], mensal em %).
+
+    Amortizações extraordinárias são abatidas do saldo logo após a prestação vencida na data do
+    pagamento extra (ou antes da 1ª, se anteriores a ela):
+      modo "parcela": mantém o nº de prestações restantes → as próximas prestações diminuem;
+      modo "prazo":   mantém a amortização mensal → o nº de prestações restantes diminui.
     """
     tr_reais = tr_reais or {}
     i_m = taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"])
@@ -559,17 +598,46 @@ def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None) -> List[dict]:
     saldo = float(fin["valor_financiado"])
     seguro = float(fin["seguro_mensal"] or 0)
     adm = float(fin["taxa_adm_mensal"] or 0)
+    extras = sorted(amortizacoes or [], key=lambda a: (a["data"], a.get("id") or 0))
+    restantes = n
+    amort_ref = saldo / n
+
+    def aplicar_extras(ate_data: Optional[str], desde_data: Optional[str]):
+        """Abate extras com desde_data <= data < ate_data. Retorna o total abatido."""
+        nonlocal saldo, restantes
+        total = 0.0
+        for a in extras:
+            if (desde_data is None or a["data"] >= desde_data) and (ate_data is None or a["data"] < ate_data):
+                if saldo <= 0.005:
+                    break
+                valor = min(float(a["valor"]), saldo)
+                saldo -= valor
+                total += valor
+                if a["modo"] == "prazo" and saldo > 0.005 and amort_ref > 0:
+                    restantes = max(1, min(restantes, math.ceil(saldo / amort_ref - 1e-9)))
+        return total
+
     linhas = []
-    for k in range(1, n + 1):
+    # Extras pagos antes da 1ª prestação
+    extra_inicial = aplicar_extras(inicio.isoformat(), None)
+
+    k = 0
+    while saldo > 0.005 and restantes > 0 and k < n:
+        k += 1
         d = somar_meses(inicio, k - 1)
+        d_prox = somar_meses(inicio, k)
         real = (d.year, d.month) in tr_reais
         tr = tr_reais[(d.year, d.month)] if real else float(fin["tr_projetada"] or 0)
+        saldo_ini = saldo
         correcao = saldo * tr / 100
         saldo_corr = saldo + correcao
-        amort = saldo_corr / (n - k + 1)
+        amort = saldo_corr / restantes
         juros = saldo_corr * i_m
         prestacao = amort + juros + seguro + adm
-        saldo_final = saldo_corr - amort
+        saldo = saldo_corr - amort
+        restantes -= 1
+        amort_ref = amort
+        extra = aplicar_extras(d_prox.isoformat(), d.isoformat())
         linhas.append({
             "n": k,
             "data": d.isoformat(),
@@ -577,43 +645,72 @@ def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None) -> List[dict]:
             "mes": d.month,
             "tr_pct": round(tr, 6),
             "tr_real": real,
-            "saldo_inicial": round(saldo, 2),
+            "saldo_inicial": round(saldo_ini, 2),
             "correcao_tr": round(correcao, 2),
             "amortizacao": round(amort, 2),
             "juros": round(juros, 2),
             "seguro": round(seguro, 2),
             "taxa_adm": round(adm, 2),
             "prestacao": round(prestacao, 2),
-            "saldo_devedor": round(max(saldo_final, 0.0), 2),
+            "amortizacao_extra": round(extra, 2),
+            "amortizacao_extra_antes": round(extra_inicial, 2) if k == 1 else 0.0,
+            "saldo_devedor": round(max(saldo, 0.0), 2),
+            "restantes": restantes if saldo > 0.005 else 0,
         })
-        saldo = saldo_final
     return linhas
 
 
 def resumo_financiamento(fin: dict, cronograma: List[dict], hoje: Optional[date] = None) -> dict:
     hoje = hoje or date.today()
+    if not cronograma:
+        return {"taxa_mensal_pct": round(taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"]) * 100, 6),
+                "quitado": True, "parcelas_total": 0, "parcelas_pagas": 0, "parcelas_restantes": 0,
+                "saldo_devedor_hoje": 0.0, "proxima_parcela": None, "total_juros": 0.0, "total_pago": 0.0,
+                "total_amortizado": 0.0, "total_correcao_tr": 0.0, "total_seguros_taxas": 0.0,
+                "total_amortizacao_extra": 0.0, "primeira_prestacao": 0.0, "ultima_prestacao": 0.0,
+                "ultima_data": None, "prestacao_sobe": None, "tr_limite_inicial_pct": 0.0}
     pagas = [l for l in cronograma if l["data"] <= hoje.isoformat()]
     futuras = [l for l in cronograma if l["data"] > hoje.isoformat()]
+    i_m = taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"])
+
+    # Diagnóstico: no SAC/TR a prestação só sobe se a TR mensal superar i ÷ (1 + i × restantes)
+    sobe = None
+    for a, b in zip(cronograma, cronograma[1:]):
+        if a["amortizacao_extra"] == 0 and b["prestacao"] > a["prestacao"] + 0.005:
+            sobe = {"de_n": a["n"], "para_n": b["n"], "de": a["prestacao"], "para": b["prestacao"],
+                    "tr_pct": b["tr_pct"]}
+            break
+    limite = i_m / (1 + i_m * int(fin["prazo_meses"])) * 100
+
+    total_extra = sum(l["amortizacao_extra"] + l["amortizacao_extra_antes"] for l in cronograma)
     return {
-        "taxa_mensal_pct": round(taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"]) * 100, 6),
+        "taxa_mensal_pct": round(i_m * 100, 6),
+        "tr_projetada_mensal_pct": round(float(fin["tr_projetada"] or 0), 6),
+        "tr_projetada_anual_pct": round(tr_mensal_para_anual(float(fin["tr_projetada"] or 0)), 4),
+        "tr_limite_inicial_pct": round(limite, 4),
+        "tr_limite_inicial_anual_pct": round(tr_mensal_para_anual(limite), 4),
+        "prestacao_sobe": sobe,
+        "quitado": not futuras,
+        "parcelas_total": len(cronograma),
         "primeira_prestacao": cronograma[0]["prestacao"],
         "ultima_prestacao": cronograma[-1]["prestacao"],
         "ultima_data": cronograma[-1]["data"],
         "total_amortizado": round(sum(l["amortizacao"] for l in cronograma), 2),
+        "total_amortizacao_extra": round(total_extra, 2),
         "total_juros": round(sum(l["juros"] for l in cronograma), 2),
         "total_correcao_tr": round(sum(l["correcao_tr"] for l in cronograma), 2),
         "total_seguros_taxas": round(sum(l["seguro"] + l["taxa_adm"] for l in cronograma), 2),
-        "total_pago": round(sum(l["prestacao"] for l in cronograma), 2),
+        "total_pago": round(sum(l["prestacao"] for l in cronograma) + total_extra, 2),
         "parcelas_pagas": len(pagas),
         "parcelas_restantes": len(futuras),
-        "saldo_devedor_hoje": pagas[-1]["saldo_devedor"] if pagas else round(float(fin["valor_financiado"]), 2),
+        "saldo_devedor_hoje": pagas[-1]["saldo_devedor"] if pagas else cronograma[0]["saldo_inicial"],
         "proxima_parcela": futuras[0] if futuras else None,
     }
 
 
 def _obs_parcela(l: dict) -> str:
     return (f"Amort. R$ {l['amortizacao']:.2f} | Juros R$ {l['juros']:.2f} | "
-            f"Seg+Adm R$ {l['seguro'] + l['taxa_adm']:.2f} | TR {l['tr_pct']:.4f}%"
+            f"Seg+Adm R$ {l['seguro'] + l['taxa_adm']:.2f} | TR {l['tr_pct']:.4f}% a.m."
             + ("" if l["tr_real"] else " (proj.)"))
 
 
@@ -632,6 +729,7 @@ def _validar_financiamento(payload: FinanciamentoInput) -> dict:
         raise HTTPException(status_code=400, detail="Informe um nome para o financiamento.")
     dados = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
     dados["nome"] = nome
+    dados["tr_projetada"] = tr_anual_para_mensal(payload.tr_projetada_anual)
     return dados
 
 
@@ -640,16 +738,58 @@ def _tr_reais(conn, fin_id: int) -> dict:
         "SELECT ano, mes, tr_pct FROM financiamento_tr WHERE financiamento_id = ?", (fin_id,)).fetchall()}
 
 
+def _amortizacoes(conn, fin_id: int) -> List[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM financiamento_amortizacoes WHERE financiamento_id = ? ORDER BY data, id", (fin_id,)).fetchall()]
+
+
+def _cronograma(conn, fin: dict, amortizacoes: Optional[List[dict]] = None) -> List[dict]:
+    amort = _amortizacoes(conn, fin["id"]) if amortizacoes is None else amortizacoes
+    return calcular_sac_tr(fin, _tr_reais(conn, fin["id"]), amort)
+
+
 def _sincronizar_lancamentos_financiamento(conn, fin: dict) -> List[dict]:
-    """Recalcula o cronograma e atualiza valor/observação das prestações já lançadas."""
-    cron = calcular_sac_tr(fin, _tr_reais(conn, fin["id"]))
+    """
+    Recalcula o cronograma e alinha as prestações lançadas:
+      - atualiza valor, observação e total de parcelas das existentes;
+      - remove as que deixaram de existir (prazo reduzido / quitação);
+      - cria as que voltaram a existir além da última lançada (ex.: amortização desfeita).
+    Prestações excluídas manualmente no meio da série não são recriadas.
+    """
+    cron = _cronograma(conn, fin)
     por_n = {l["n"]: l for l in cron}
-    for row in conn.execute("SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ?", (fin["id"],)).fetchall():
+    total = len(cron)
+    existentes = conn.execute(
+        "SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ? AND amortizacao_id IS NULL",
+        (fin["id"],)).fetchall()
+    max_n = 0
+    for row in existentes:
         l = por_n.get(row["parcela_num"])
         if l:
-            conn.execute("UPDATE lancamentos SET valor = ?, observacao = ? WHERE id = ?",
-                         (l["prestacao"], _obs_parcela(l), row["id"]))
+            conn.execute("UPDATE lancamentos SET valor = ?, observacao = ?, parcela_total = ? WHERE id = ?",
+                         (l["prestacao"], _obs_parcela(l), total, row["id"]))
+            max_n = max(max_n, row["parcela_num"])
+        else:
+            conn.execute("DELETE FROM lancamentos WHERE id = ?", (row["id"],))
+    a_partir = fin.get("lancar_a_partir_de") or (cron[0]["data"][:7] if cron else "9999-12")
+    if existentes:
+        for l in cron:
+            if l["n"] > max_n and l["data"][:7] >= a_partir:
+                _inserir_prestacao(conn, fin, l, total)
     return cron
+
+
+def _inserir_prestacao(conn, fin: dict, l: dict, total: int):
+    conn.execute(
+        """
+        INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao,
+            competencia, recorrencia_id, parcela_num, parcela_total, financiamento_id)
+        VALUES (?, ?, ?, 'Despesa', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (l["data"], l["mes"], l["ano"], fin["categoria"], f"Financiamento {fin['nome']}", l["prestacao"],
+         fin["forma_pgto"], _obs_parcela(l), f"{l['mes']:02d}/{l['ano']}", fin["recorrencia_id"], l["n"],
+         total, fin["id"]),
+    )
 
 
 def _obter_financiamento(conn, fin_id: int) -> dict:
@@ -1008,6 +1148,15 @@ def excluir_lancamento(lanc_id: int, escopo: str = "unico"):
         conn.close()
         raise HTTPException(status_code=404, detail="Lançamento não encontrado.")
 
+    # Lançamento de amortização extra: desfaz a amortização inteira (mantém o cronograma coerente)
+    if lanc["amortizacao_id"] and lanc["financiamento_id"]:
+        fin = conn.execute("SELECT * FROM financiamentos WHERE id = ?", (lanc["financiamento_id"],)).fetchone()
+        if fin:
+            _remover_amortizacao(conn, dict(fin), lanc["amortizacao_id"])
+            conn.commit()
+            conn.close()
+            return {"status": "deleted", "id": lanc_id, "escopo": "amortizacao", "removidos": 1}
+
     rid = lanc["recorrencia_id"]
     if not rid or escopo == "unico":
         cur.execute("DELETE FROM lancamentos WHERE id = ?", (lanc_id,))
@@ -1287,7 +1436,8 @@ def criar_financiamento(payload: FinanciamentoInput):
     if not parcelas:
         raise HTTPException(status_code=400, detail="Nenhuma prestação a lançar a partir do mês informado.")
 
-    recorrencia_id = uuid.uuid4().hex
+    fin["recorrencia_id"] = uuid.uuid4().hex
+    fin["lancar_a_partir_de"] = a_partir
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -1300,34 +1450,30 @@ def criar_financiamento(payload: FinanciamentoInput):
             """,
             (fin["nome"], fin["valor_financiado"], fin["taxa_juros_anual"], fin["tipo_taxa"], fin["prazo_meses"],
              fin["data_primeira_parcela"], fin["tr_projetada"], fin["seguro_mensal"], fin["taxa_adm_mensal"],
-             fin["categoria"], fin["forma_pgto"], a_partir, recorrencia_id,
+             fin["categoria"], fin["forma_pgto"], a_partir, fin["recorrencia_id"],
              datetime.now().isoformat(timespec="seconds")),
         )
-        fin_id = cur.lastrowid
+        fin["id"] = cur.lastrowid
         cur.execute(
             """
             INSERT INTO recorrencias (id, frequencia, modo, ocorrencias, data_inicio, valor_informado, criado_em)
             VALUES (?, 'mensal', 'financiamento', ?, ?, ?, ?)
             """,
-            (recorrencia_id, fin["prazo_meses"], fin["data_primeira_parcela"], fin["valor_financiado"],
+            (fin["recorrencia_id"], fin["prazo_meses"], fin["data_primeira_parcela"], fin["valor_financiado"],
              datetime.now().isoformat(timespec="seconds")),
         )
         for l in parcelas:
-            cur.execute(
-                """
-                INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao,
-                    competencia, recorrencia_id, parcela_num, parcela_total, financiamento_id)
-                VALUES (?, ?, ?, 'Despesa', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (l["data"], l["mes"], l["ano"], fin["categoria"], f"Financiamento {fin['nome']}", l["prestacao"],
-                 fin["forma_pgto"], _obs_parcela(l), f"{l['mes']:02d}/{l['ano']}", recorrencia_id, l["n"],
-                 fin["prazo_meses"], fin_id),
-            )
+            _inserir_prestacao(conn, fin, l, len(cron))
         conn.commit()
     finally:
         conn.close()
-    return {"status": "ok", "id": fin_id, "lancamentos_gerados": len(parcelas),
+    return {"status": "ok", "id": fin["id"], "lancamentos_gerados": len(parcelas),
             "primeira_competencia": parcelas[0]["data"][:7], "ultima_competencia": parcelas[-1]["data"][:7]}
+
+
+def _com_tr_anual(fin: dict) -> dict:
+    fin["tr_projetada_anual"] = round(tr_mensal_para_anual(float(fin["tr_projetada"] or 0)), 4)
+    return fin
 
 
 @app.get("/api/financiamentos")
@@ -1335,8 +1481,8 @@ def listar_financiamentos():
     conn = get_db_connection()
     resultado = []
     for row in conn.execute("SELECT * FROM financiamentos ORDER BY id").fetchall():
-        fin = dict(row)
-        cron = calcular_sac_tr(fin, _tr_reais(conn, fin["id"]))
+        fin = _com_tr_anual(dict(row))
+        cron = _cronograma(conn, fin)
         resultado.append({**fin, "resumo": resumo_financiamento(fin, cron)})
     conn.close()
     return resultado
@@ -1344,16 +1490,141 @@ def listar_financiamentos():
 
 @app.get("/api/financiamentos/{fin_id}")
 def obter_financiamento(fin_id: int):
-    """Contrato + cronograma completo (com TR real/projetada) + indicação de quais prestações estão lançadas."""
+    """
+    Contrato + cronograma (com TR real/projetada e amortizações extras) + quais prestações estão lançadas
+    + comparação com o cenário sem amortizações extraordinárias.
+    """
     conn = get_db_connection()
-    fin = _obter_financiamento(conn, fin_id)
-    cron = calcular_sac_tr(fin, _tr_reais(conn, fin_id))
+    fin = _com_tr_anual(_obter_financiamento(conn, fin_id))
+    amortizacoes = _amortizacoes(conn, fin_id)
+    cron = _cronograma(conn, fin, amortizacoes)
+    sem_extra = _cronograma(conn, fin, [])
     lancadas = {r["parcela_num"]: r["id"] for r in conn.execute(
-        "SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ?", (fin_id,)).fetchall()}
+        "SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ? AND amortizacao_id IS NULL",
+        (fin_id,)).fetchall()}
     conn.close()
     for l in cron:
         l["lancamento_id"] = lancadas.get(l["n"])
-    return {**fin, "resumo": resumo_financiamento(fin, cron), "cronograma": cron}
+    resumo = resumo_financiamento(fin, cron)
+    resumo_sem = resumo_financiamento(fin, sem_extra)
+    return {
+        **fin,
+        "resumo": resumo,
+        "cronograma": cron,
+        "amortizacoes": amortizacoes,
+        "efeito_amortizacoes": {
+            "economia_juros": round(resumo_sem["total_juros"] - resumo["total_juros"], 2),
+            "meses_a_menos": resumo_sem["parcelas_total"] - resumo["parcelas_total"],
+            "ultima_data_original": resumo_sem["ultima_data"],
+        },
+    }
+
+
+def _comparar_amortizacao(fin: dict, base: List[dict], com: List[dict], data_extra: str) -> dict:
+    """Compara cronogramas antes/depois de uma amortização: juros, prazo e próxima prestação."""
+    juros_base = sum(l["juros"] for l in base)
+    juros_com = sum(l["juros"] for l in com)
+    prox_base = next((l for l in base if l["data"] > data_extra), None)
+    prox_com = next((l for l in com if l["data"] > data_extra), None)
+    return {
+        "economia_juros": round(juros_base - juros_com, 2),
+        "parcelas_antes": len(base),
+        "parcelas_depois": len(com),
+        "meses_a_menos": len(base) - len(com),
+        "ultima_data_antes": base[-1]["data"] if base else None,
+        "ultima_data_depois": com[-1]["data"] if com else None,
+        "proxima_prestacao_antes": prox_base["prestacao"] if prox_base else None,
+        "proxima_prestacao_depois": prox_com["prestacao"] if prox_com else None,
+        "proxima_data": prox_com["data"] if prox_com else None,
+        "quita": not com or com[-1]["data"] <= data_extra,
+    }
+
+
+def fmt_brl(v: float) -> str:
+    return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _validar_amortizacao(conn, fin: dict, payload: AmortizacaoInput, base: List[dict]):
+    try:
+        datetime.strptime(payload.data, "%Y-%m-%d")
+    except ValueError:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
+    if not base or payload.data >= base[-1]["data"]:
+        conn.close()
+        raise HTTPException(status_code=400, detail="A data da amortização deve ser anterior à última prestação.")
+    # saldo devedor no momento do pagamento extra
+    anteriores = [l for l in base if l["data"] <= payload.data]
+    saldo = anteriores[-1]["saldo_devedor"] if anteriores else float(fin["valor_financiado"])
+    if payload.valor > saldo + 0.01:
+        conn.close()
+        raise HTTPException(status_code=400,
+                            detail=f"O valor ultrapassa o saldo devedor nessa data (R$ {fmt_brl(saldo)}).")
+
+
+@app.post("/api/financiamentos/{fin_id}/amortizacoes/simular")
+def simular_amortizacao(fin_id: int, payload: AmortizacaoInput):
+    """Mostra o efeito de uma amortização extraordinária sem gravar."""
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    amortizacoes = _amortizacoes(conn, fin_id)
+    base = _cronograma(conn, fin, amortizacoes)
+    _validar_amortizacao(conn, fin, payload, base)
+    nova = {"id": 10 ** 9, "data": payload.data, "valor": payload.valor, "modo": payload.modo}
+    com = _cronograma(conn, fin, amortizacoes + [nova])
+    conn.close()
+    return _comparar_amortizacao(fin, base, com, payload.data)
+
+
+@app.post("/api/financiamentos/{fin_id}/amortizacoes")
+def registrar_amortizacao(fin_id: int, payload: AmortizacaoInput):
+    """
+    Registra uma amortização extraordinária: lança o pagamento como despesa na data informada
+    e recalcula as prestações (reduzindo prazo ou parcela).
+    """
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    amortizacoes = _amortizacoes(conn, fin_id)
+    base = _cronograma(conn, fin, amortizacoes)
+    _validar_amortizacao(conn, fin, payload, base)
+    cur = conn.execute(
+        "INSERT INTO financiamento_amortizacoes (financiamento_id, data, valor, modo, criado_em) VALUES (?, ?, ?, ?, ?)",
+        (fin_id, payload.data, round(payload.valor, 2), payload.modo, datetime.now().isoformat(timespec="seconds")),
+    )
+    amort_id = cur.lastrowid
+    d = datetime.strptime(payload.data, "%Y-%m-%d").date()
+    conn.execute(
+        """
+        INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao,
+            competencia, financiamento_id, amortizacao_id)
+        VALUES (?, ?, ?, 'Despesa', ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (payload.data, d.month, d.year, fin["categoria"], f"Amortização extra {fin['nome']}", round(payload.valor, 2),
+         fin["forma_pgto"], "Reduz prazo" if payload.modo == "prazo" else "Reduz parcela",
+         f"{d.month:02d}/{d.year}", fin_id, amort_id),
+    )
+    cron = _sincronizar_lancamentos_financiamento(conn, fin)
+    efeito = _comparar_amortizacao(fin, base, cron, payload.data)
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "id": amort_id, **efeito}
+
+
+def _remover_amortizacao(conn, fin: dict, amort_id: int):
+    conn.execute("DELETE FROM lancamentos WHERE amortizacao_id = ?", (amort_id,))
+    conn.execute("DELETE FROM financiamento_amortizacoes WHERE id = ? AND financiamento_id = ?", (amort_id, fin["id"]))
+    _sincronizar_lancamentos_financiamento(conn, fin)
+
+
+@app.delete("/api/financiamentos/{fin_id}/amortizacoes/{amort_id}")
+def excluir_amortizacao(fin_id: int, amort_id: int):
+    """Desfaz uma amortização extraordinária (remove o lançamento e recalcula as prestações)."""
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    _remover_amortizacao(conn, fin, amort_id)
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": amort_id}
 
 
 @app.put("/api/financiamentos/{fin_id}/tr")
@@ -1380,11 +1651,11 @@ def definir_tr_mensal(fin_id: int, payload: TRMensalInput):
 
 @app.put("/api/financiamentos/{fin_id}/tr-projetada")
 def definir_tr_projetada(fin_id: int, payload: TRProjetadaInput):
-    """Altera a TR projetada (usada nos meses sem TR real) e recalcula as prestações."""
+    """Altera a TR projetada (informada AO ANO, aplicada como taxa mensal equivalente) e recalcula."""
     conn = get_db_connection()
     fin = _obter_financiamento(conn, fin_id)
-    conn.execute("UPDATE financiamentos SET tr_projetada = ? WHERE id = ?", (payload.tr_pct, fin_id))
-    fin["tr_projetada"] = payload.tr_pct
+    fin["tr_projetada"] = tr_anual_para_mensal(payload.tr_anual_pct)
+    conn.execute("UPDATE financiamentos SET tr_projetada = ? WHERE id = ?", (fin["tr_projetada"], fin_id))
     _sincronizar_lancamentos_financiamento(conn, fin)
     conn.commit()
     conn.close()
@@ -1393,11 +1664,12 @@ def definir_tr_projetada(fin_id: int, payload: TRProjetadaInput):
 
 @app.delete("/api/financiamentos/{fin_id}")
 def excluir_financiamento(fin_id: int):
-    """Exclui o financiamento, as TRs registradas e todas as prestações lançadas."""
+    """Exclui o financiamento, TRs, amortizações extras e todos os lançamentos vinculados."""
     conn = get_db_connection()
     fin = _obter_financiamento(conn, fin_id)
     removidos = conn.execute("DELETE FROM lancamentos WHERE financiamento_id = ?", (fin_id,)).rowcount
     conn.execute("DELETE FROM financiamento_tr WHERE financiamento_id = ?", (fin_id,))
+    conn.execute("DELETE FROM financiamento_amortizacoes WHERE financiamento_id = ?", (fin_id,))
     if fin["recorrencia_id"]:
         conn.execute("DELETE FROM recorrencias WHERE id = ?", (fin["recorrencia_id"],))
     conn.execute("DELETE FROM financiamentos WHERE id = ?", (fin_id,))
