@@ -71,6 +71,22 @@ def init_db():
             criado_em TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS cartoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE,
+            dia_fechamento INTEGER NOT NULL,
+            dia_vencimento INTEGER NOT NULL,
+            limite REAL DEFAULT 0.0
+        );
+
+        CREATE TABLE IF NOT EXISTS faturas_pagas (
+            cartao_id INTEGER NOT NULL,
+            ano INTEGER NOT NULL,
+            mes INTEGER NOT NULL,
+            data_pagamento TEXT NOT NULL,
+            PRIMARY KEY (cartao_id, ano, mes)
+        );
+
         CREATE TABLE IF NOT EXISTS orcamento (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             macro_categoria TEXT NOT NULL,
@@ -122,10 +138,12 @@ def init_db():
         ("recorrencia_id", "TEXT"),
         ("parcela_num", "INTEGER"),
         ("parcela_total", "INTEGER"),
+        ("cartao_id", "INTEGER"),
     ):
         if col not in colunas_lanc:
             cur.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {ddl}")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_lanc_recorrencia ON lancamentos(recorrencia_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_lanc_cartao ON lancamentos(cartao_id, ano, mes)")
 
     # Garante configuração inicial da reserva de emergência
     row_res = cur.execute("SELECT id FROM reserva_config WHERE id = 1").fetchone()
@@ -268,6 +286,21 @@ class LancamentoInput(BaseModel):
     forma_pgto: str = "PIX"
     observacao: Optional[str] = ""
     recorrencia: Optional[RecorrenciaInput] = None
+    cartao_id: Optional[int] = Field(
+        default=None,
+        description="Compra no cartão de crédito: o lançamento entra na fatura calculada pelo fechamento do cartão",
+    )
+
+
+class CartaoInput(BaseModel):
+    nome: str = Field(..., min_length=1)
+    dia_fechamento: int = Field(..., ge=1, le=31)
+    dia_vencimento: int = Field(..., ge=1, le=31)
+    limite: float = Field(default=0.0, ge=0)
+
+
+class PagamentoFaturaInput(BaseModel):
+    data_pagamento: Optional[str] = None
 
 
 class OrcamentoInput(BaseModel):
@@ -370,6 +403,78 @@ def dividir_valor(total: float, partes: int) -> List[float]:
     valores = [base] * partes
     valores[0] += resto
     return [v / 100 for v in valores]
+
+
+# ==========================================
+# Utilitários de Cartão de Crédito / Fatura
+# ==========================================
+def dia_no_mes(ano: int, mes: int, dia: int) -> date:
+    """Data com o dia limitado ao tamanho do mês (dia 31 em fevereiro vira 28/29)."""
+    return date(ano, mes, min(dia, calendar.monthrange(ano, mes)[1]))
+
+
+def mover_mes(ano: int, mes: int, delta: int) -> tuple:
+    t = ano * 12 + (mes - 1) + delta
+    return t // 12, t % 12 + 1
+
+
+def datas_da_fatura(cartao, ano: int, mes: int) -> tuple:
+    """
+    Fatura identificada pelo mês de VENCIMENTO (ano/mes).
+    Se o fechamento é antes do vencimento no calendário (ex.: fecha 3, vence 10), fecha no mesmo mês;
+    caso contrário (ex.: fecha 28, vence 5), fecha no mês anterior.
+    """
+    venc = dia_no_mes(ano, mes, cartao["dia_vencimento"])
+    fa, fm = (ano, mes) if cartao["dia_fechamento"] < cartao["dia_vencimento"] else mover_mes(ano, mes, -1)
+    fech = dia_no_mes(fa, fm, cartao["dia_fechamento"])
+    return fech, venc
+
+
+def fatura_da_compra(cartao, d: date) -> tuple:
+    """Primeira fatura cujo fechamento é DEPOIS da compra (compra no dia do fechamento vai para a próxima)."""
+    for delta in range(-1, 3):
+        a, m = mover_mes(d.year, d.month, delta)
+        fech, _ = datas_da_fatura(cartao, a, m)
+        if d < fech:
+            return a, m
+    return mover_mes(d.year, d.month, 3)  # inalcançável na prática
+
+
+def status_da_fatura(cartao, ano: int, mes: int, paga: bool, hoje: Optional[date] = None) -> str:
+    hoje = hoje or date.today()
+    fech, venc = datas_da_fatura(cartao, ano, mes)
+    if paga:
+        return "paga"
+    if hoje < fech:
+        return "aberta"
+    if hoje <= venc:
+        return "fechada"
+    return "vencida"
+
+
+def info_fatura(cartao, ano: int, mes: int, total: float, paga_em: Optional[str]) -> dict:
+    fech, venc = datas_da_fatura(cartao, ano, mes)
+    return {
+        "cartao_id": cartao["id"],
+        "cartao": cartao["nome"],
+        "ano": ano,
+        "mes": mes,
+        "label": f"{MESES_ABREV[mes - 1]}/{str(ano)[2:]}",
+        "fechamento": fech.isoformat(),
+        "vencimento": venc.isoformat(),
+        "total": round(total, 2),
+        "paga": paga_em is not None,
+        "data_pagamento": paga_em,
+        "status": status_da_fatura(cartao, ano, mes, paga_em is not None),
+    }
+
+
+def obter_cartao(conn, cartao_id: int):
+    cartao = conn.execute("SELECT * FROM cartoes WHERE id = ?", (cartao_id,)).fetchone()
+    if not cartao:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Cartão não encontrado.")
+    return cartao
 
 
 # ==========================================
@@ -542,6 +647,7 @@ def listar_lancamentos(
     tipo: Optional[str] = None,
     busca: Optional[str] = None,
     recorrencia: Optional[str] = None,
+    cartao_id: Optional[int] = None,
 ):
     """
     Lista os lançamentos com suporte a filtros combinados de período, tipo, termo de busca
@@ -565,19 +671,26 @@ def listar_lancamentos(
     else:
         sql_j, params = filtro_janela(janela_meses(ano, mes_inicio))
         query = f"SELECT * FROM lancamentos WHERE {sql_j}"
+    query = query.replace(
+        "SELECT * FROM lancamentos WHERE",
+        "SELECT l.*, k.nome AS cartao_nome FROM lancamentos l LEFT JOIN cartoes k ON k.id = l.cartao_id WHERE",
+    )
     if tipo and tipo in ("Receita", "Despesa"):
         query += " AND tipo = ?"
         params.append(tipo)
     if busca:
-        query += " AND (descricao LIKE ? OR categoria LIKE ? OR observacao LIKE ?)"
+        query += " AND (descricao LIKE ? OR categoria LIKE ? OR observacao LIKE ? OR k.nome LIKE ?)"
         termo = f"%{busca}%"
-        params.extend([termo, termo, termo])
+        params.extend([termo, termo, termo, termo])
     if recorrencia == "unico":
         query += " AND recorrencia_id IS NULL"
     elif recorrencia == "recorrente":
         query += " AND recorrencia_id IS NOT NULL"
+    if cartao_id:
+        query += " AND l.cartao_id = ?"
+        params.append(cartao_id)
 
-    query += " ORDER BY data DESC, id DESC"
+    query += " ORDER BY l.data DESC, l.id DESC"
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -601,6 +714,16 @@ def criar_lancamento(payload: LancamentoInput):
     observacao = (payload.observacao or "").strip()
     valor = round(payload.valor, 2)
     rec = payload.recorrencia
+    forma_pgto = payload.forma_pgto
+
+    cartao = None
+    if payload.cartao_id is not None:
+        conn_c = get_db_connection()
+        cartao = obter_cartao(conn_c, payload.cartao_id)
+        conn_c.close()
+        if payload.tipo != "Despesa":
+            raise HTTPException(status_code=400, detail="Compras no cartão devem ser do tipo Despesa.")
+        forma_pgto = "Crédito"
 
     if rec is None:
         datas = [dt]
@@ -616,6 +739,17 @@ def criar_lancamento(payload: LancamentoInput):
             valores = [valor] * rec.ocorrencias
         recorrencia_id = uuid.uuid4().hex
 
+    # Mês contábil de cada ocorrência: data da compra, ou mês da fatura quando é compra no cartão.
+    if cartao is None:
+        periodos_contabeis = [(d.year, d.month) for d in datas]
+    elif rec is not None and rec.modo == "parcelar":
+        # Parcelas no cartão: mesma data de compra, uma parcela em cada fatura seguinte
+        base = fatura_da_compra(cartao, dt)
+        periodos_contabeis = [mover_mes(base[0], base[1], i) for i in range(len(datas))]
+        datas = [dt] * len(datas)
+    else:
+        periodos_contabeis = [fatura_da_compra(cartao, d) for d in datas]
+
     conn = get_db_connection()
     cur = conn.cursor()
     ids = []
@@ -630,27 +764,28 @@ def criar_lancamento(payload: LancamentoInput):
                  datetime.now().isoformat(timespec="seconds")),
             )
         total = len(datas)
-        for i, (d, v) in enumerate(zip(datas, valores), start=1):
+        for i, (d, v, (p_ano, p_mes)) in enumerate(zip(datas, valores, periodos_contabeis), start=1):
             cur.execute(
                 """
                 INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao,
-                                         competencia, recorrencia_id, parcela_num, parcela_total)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         competencia, recorrencia_id, parcela_num, parcela_total, cartao_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     d.isoformat(),
-                    d.month,
-                    d.year,
+                    p_mes,
+                    p_ano,
                     payload.tipo,
                     payload.categoria,
                     descricao,
                     v,
-                    payload.forma_pgto,
+                    forma_pgto,
                     observacao,
-                    f"{d.month:02d}/{d.year}",
+                    f"{p_mes:02d}/{p_ano}",
                     recorrencia_id,
                     i if recorrencia_id else None,
                     total if recorrencia_id else None,
+                    payload.cartao_id,
                 ),
             )
             ids.append(cur.lastrowid)
@@ -666,6 +801,8 @@ def criar_lancamento(payload: LancamentoInput):
         "quantidade": len(ids),
         "primeira_data": datas[0].isoformat(),
         "ultima_data": datas[-1].isoformat(),
+        "primeira_competencia": "%04d-%02d" % periodos_contabeis[0],
+        "ultima_competencia": "%04d-%02d" % periodos_contabeis[-1],
     }
 
 
@@ -709,6 +846,238 @@ def excluir_lancamento(lanc_id: int, escopo: str = "unico"):
     conn.commit()
     conn.close()
     return {"status": "deleted", "id": lanc_id, "escopo": escopo, "removidos": removidos}
+
+
+# ==========================================
+# Cartões de Crédito e Faturas
+# ==========================================
+def _validar_cartao(payload: CartaoInput) -> str:
+    nome = payload.nome.strip()
+    if not nome:
+        raise HTTPException(status_code=400, detail="O nome do cartão não pode estar em branco.")
+    if payload.dia_fechamento == payload.dia_vencimento:
+        raise HTTPException(status_code=400, detail="O dia de fechamento deve ser diferente do dia de vencimento.")
+    return nome
+
+
+def _total_fatura(conn, cartao_id: int, ano: int, mes: int) -> float:
+    return conn.execute(
+        "SELECT COALESCE(SUM(valor), 0) FROM lancamentos WHERE cartao_id = ? AND ano = ? AND mes = ?",
+        (cartao_id, ano, mes),
+    ).fetchone()[0]
+
+
+def _paga_em(conn, cartao_id: int, ano: int, mes: int) -> Optional[str]:
+    row = conn.execute(
+        "SELECT data_pagamento FROM faturas_pagas WHERE cartao_id = ? AND ano = ? AND mes = ?",
+        (cartao_id, ano, mes),
+    ).fetchone()
+    return row["data_pagamento"] if row else None
+
+
+@app.get("/api/cartoes")
+def listar_cartoes():
+    """
+    Lista os cartões com a fatura atual (a que recebe compras de hoje), limite usado
+    (soma de todas as faturas não pagas, incluindo parcelas futuras) e limite disponível.
+    """
+    conn = get_db_connection()
+    cartoes = conn.execute("SELECT * FROM cartoes ORDER BY nome COLLATE NOCASE").fetchall()
+    hoje = date.today()
+    resultado = []
+    for c in cartoes:
+        usado = conn.execute(
+            """
+            SELECT COALESCE(SUM(l.valor), 0) FROM lancamentos l
+            LEFT JOIN faturas_pagas f ON f.cartao_id = l.cartao_id AND f.ano = l.ano AND f.mes = l.mes
+            WHERE l.cartao_id = ? AND f.cartao_id IS NULL
+            """,
+            (c["id"],),
+        ).fetchone()[0]
+        qtd = conn.execute("SELECT COUNT(*) FROM lancamentos WHERE cartao_id = ?", (c["id"],)).fetchone()[0]
+        a, m = fatura_da_compra(c, hoje)
+        atual = info_fatura(c, a, m, _total_fatura(conn, c["id"], a, m), _paga_em(conn, c["id"], a, m))
+        resultado.append({
+            **dict(c),
+            "limite_usado": round(usado, 2),
+            "limite_disponivel": round((c["limite"] or 0) - usado, 2),
+            "total_lancamentos": qtd,
+            "fatura_atual": atual,
+        })
+    conn.close()
+    return resultado
+
+
+@app.post("/api/cartoes")
+def criar_cartao(payload: CartaoInput):
+    nome = _validar_cartao(payload)
+    conn = get_db_connection()
+    if conn.execute("SELECT id FROM cartoes WHERE LOWER(nome) = LOWER(?)", (nome,)).fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"O cartão '{nome}' já está cadastrado.")
+    cur = conn.execute(
+        "INSERT INTO cartoes (nome, dia_fechamento, dia_vencimento, limite) VALUES (?, ?, ?, ?)",
+        (nome, payload.dia_fechamento, payload.dia_vencimento, round(payload.limite, 2)),
+    )
+    conn.commit()
+    novo_id = cur.lastrowid
+    conn.close()
+    return {"status": "ok", "id": novo_id}
+
+
+@app.put("/api/cartoes/{cartao_id}")
+def atualizar_cartao(cartao_id: int, payload: CartaoInput):
+    """
+    Atualiza o cartão. Mudar fechamento/vencimento vale para compras futuras;
+    compras já lançadas permanecem nas faturas em que foram registradas.
+    """
+    nome = _validar_cartao(payload)
+    conn = get_db_connection()
+    obter_cartao(conn, cartao_id)
+    if conn.execute("SELECT id FROM cartoes WHERE LOWER(nome) = LOWER(?) AND id != ?", (nome, cartao_id)).fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"Já existe outro cartão chamado '{nome}'.")
+    conn.execute(
+        "UPDATE cartoes SET nome = ?, dia_fechamento = ?, dia_vencimento = ?, limite = ? WHERE id = ?",
+        (nome, payload.dia_fechamento, payload.dia_vencimento, round(payload.limite, 2), cartao_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "id": cartao_id}
+
+
+@app.delete("/api/cartoes/{cartao_id}")
+def excluir_cartao(cartao_id: int):
+    """Exclui um cartão. Bloqueado se houver compras lançadas nele (Poka-Yoke)."""
+    conn = get_db_connection()
+    cartao = obter_cartao(conn, cartao_id)
+    qtd = conn.execute("SELECT COUNT(*) FROM lancamentos WHERE cartao_id = ?", (cartao_id,)).fetchone()[0]
+    if qtd > 0:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Não é possível excluir: o cartão '{cartao['nome']}' tem {qtd} compra(s) lançada(s). Exclua as compras antes.",
+        )
+    conn.execute("DELETE FROM faturas_pagas WHERE cartao_id = ?", (cartao_id,))
+    conn.execute("DELETE FROM cartoes WHERE id = ?", (cartao_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": cartao_id}
+
+
+@app.get("/api/cartoes/{cartao_id}/fatura-da-compra")
+def consultar_fatura_da_compra(cartao_id: int, data: str):
+    """Informa em qual fatura uma compra feita em `data` vai cair (usado na prévia do formulário)."""
+    try:
+        d = datetime.strptime(data, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
+    conn = get_db_connection()
+    cartao = obter_cartao(conn, cartao_id)
+    a, m = fatura_da_compra(cartao, d)
+    info = info_fatura(cartao, a, m, _total_fatura(conn, cartao_id, a, m), _paga_em(conn, cartao_id, a, m))
+    conn.close()
+    return info
+
+
+@app.get("/api/cartoes/{cartao_id}/faturas/{ano}/{mes}")
+def obter_fatura(cartao_id: int, ano: int, mes: int):
+    """Detalha uma fatura (identificada pelo mês de vencimento): datas, status, total e itens."""
+    if not 1 <= mes <= 12:
+        raise HTTPException(status_code=400, detail="Mês inválido.")
+    conn = get_db_connection()
+    cartao = obter_cartao(conn, cartao_id)
+    itens = [dict(r) for r in conn.execute(
+        "SELECT * FROM lancamentos WHERE cartao_id = ? AND ano = ? AND mes = ? ORDER BY data ASC, id ASC",
+        (cartao_id, ano, mes),
+    ).fetchall()]
+    total = sum(i["valor"] for i in itens)
+    info = info_fatura(cartao, ano, mes, total, _paga_em(conn, cartao_id, ano, mes))
+    conn.close()
+
+    por_categoria = {}
+    for i in itens:
+        por_categoria[i["categoria"]] = round(por_categoria.get(i["categoria"], 0) + i["valor"], 2)
+    return {
+        **info,
+        "itens": itens,
+        "quantidade": len(itens),
+        "por_categoria": sorted(
+            ({"categoria": k, "total": v} for k, v in por_categoria.items()), key=lambda x: -x["total"]
+        ),
+    }
+
+
+@app.post("/api/cartoes/{cartao_id}/faturas/{ano}/{mes}/pagar")
+def pagar_fatura(cartao_id: int, ano: int, mes: int, payload: Optional[PagamentoFaturaInput] = None):
+    """
+    Marca a fatura como paga. Não cria lançamento de despesa: as compras já contam
+    como despesa no mês da fatura (evita contar em dobro).
+    """
+    data_pag = (payload.data_pagamento if payload else None) or date.today().isoformat()
+    try:
+        datetime.strptime(data_pag, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data de pagamento inválida. Use YYYY-MM-DD.")
+    conn = get_db_connection()
+    obter_cartao(conn, cartao_id)
+    conn.execute(
+        """
+        INSERT INTO faturas_pagas (cartao_id, ano, mes, data_pagamento) VALUES (?, ?, ?, ?)
+        ON CONFLICT(cartao_id, ano, mes) DO UPDATE SET data_pagamento = excluded.data_pagamento
+        """,
+        (cartao_id, ano, mes, data_pag),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.delete("/api/cartoes/{cartao_id}/faturas/{ano}/{mes}/pagar")
+def reabrir_fatura(cartao_id: int, ano: int, mes: int):
+    """Desfaz a marcação de pagamento da fatura."""
+    conn = get_db_connection()
+    conn.execute("DELETE FROM faturas_pagas WHERE cartao_id = ? AND ano = ? AND mes = ?", (cartao_id, ano, mes))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/faturas")
+def resumo_faturas(ano: int = 2026, mes_inicio: int = 1):
+    """Linha do tempo das faturas: total e status de cada cartão em cada mês da janela de 12 meses."""
+    periodos = janela_meses(ano, mes_inicio)
+    sql_j, params_j = filtro_janela(periodos)
+    conn = get_db_connection()
+    cartoes = conn.execute("SELECT * FROM cartoes ORDER BY nome COLLATE NOCASE").fetchall()
+    totais = {
+        (r["cartao_id"], r["ano"], r["mes"]): r["total"]
+        for r in conn.execute(
+            f"""
+            SELECT cartao_id, ano, mes, SUM(valor) AS total FROM lancamentos
+            WHERE cartao_id IS NOT NULL AND {sql_j}
+            GROUP BY cartao_id, ano, mes
+            """,
+            params_j,
+        ).fetchall()
+    }
+    pagas = {
+        (r["cartao_id"], r["ano"], r["mes"]): r["data_pagamento"]
+        for r in conn.execute("SELECT * FROM faturas_pagas").fetchall()
+    }
+    conn.close()
+
+    linhas = []
+    for c in cartoes:
+        faturas = [
+            info_fatura(c, p["ano"], p["mes"], totais.get((c["id"], p["ano"], p["mes"]), 0.0),
+                        pagas.get((c["id"], p["ano"], p["mes"])))
+            for p in periodos
+        ]
+        linhas.append({"cartao_id": c["id"], "cartao": c["nome"], "faturas": faturas,
+                       "total": round(sum(f["total"] for f in faturas), 2)})
+    totais_mes = [round(sum(l["faturas"][i]["total"] for l in linhas), 2) for i in range(12)]
+    return {"periodos": periodos, "linhas": linhas, "totais_mes": totais_mes}
 
 
 @app.get("/api/dashboard")

@@ -32,6 +32,7 @@
         <nav class="flex space-x-1 overflow-x-auto">
             <button onclick="switchTab('dashboard')" id="tab-dashboard" class="px-4 py-2 text-sm tab-active transition">📊 Dashboard</button>
             <button onclick="switchTab('lancamentos')" id="tab-lancamentos" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📝 Lançamentos</button>
+            <button onclick="switchTab('cartoes')" id="tab-cartoes" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">💳 Cartões & Faturas</button>
             <button onclick="switchTab('categorias')" id="tab-categorias" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🏷️ Categorias</button>
             <button onclick="switchTab('resumo')" id="tab-resumo" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📥 Receitas & Despesas</button>
             <button onclick="switchTab('orcamento')" id="tab-orcamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📋 Orçamento vs Real</button>
@@ -144,11 +145,11 @@
                 <form id="formLancamento" onsubmit="salvarLancamento(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end">
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Data *</label>
-                        <input type="date" id="inpData" required onchange="atualizarCamposRecorrencia()" class="w-full rounded px-3 py-1.5 text-sm">
+                        <input type="date" id="inpData" required onchange="atualizarCamposRecorrencia(); atualizarCampoCartao()" class="w-full rounded px-3 py-1.5 text-sm">
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
-                        <select id="inpTipo" onchange="atualizarDropdownCategorias()" class="w-full rounded px-3 py-1.5 text-sm font-semibold">
+                        <select id="inpTipo" onchange="atualizarDropdownCategorias(); atualizarCampoCartao()" class="w-full rounded px-3 py-1.5 text-sm font-semibold">
                             <option value="Despesa">🔻 Despesa</option>
                             <option value="Receita">🔺 Receita</option>
                         </select>
@@ -171,7 +172,7 @@
                     <div class="flex gap-2">
                         <div class="flex-1">
                             <label class="block text-xs text-slate-400 mb-1">Pgto / Conta</label>
-                            <select id="inpFormaPgto" class="w-full rounded px-2 py-1.5 text-sm">
+                            <select id="inpFormaPgto" onchange="atualizarCampoCartao()" class="w-full rounded px-2 py-1.5 text-sm">
                                 <option value="PIX">PIX</option>
                                 <option value="Crédito">Crédito</option>
                                 <option value="Débito">Débito</option>
@@ -184,6 +185,15 @@
                             <input type="text" id="inpObs" placeholder="Itaú, Nubank, Caixa" value="Itaú" class="w-full rounded px-2 py-1.5 text-sm">
                         </div>
                     </div>
+                    <!-- Cartão de crédito (aparece quando Pgto = Crédito) -->
+                    <div id="boxCartao" class="hidden sm:col-span-2 lg:col-span-7 border-t border-slate-800 pt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end">
+                        <div class="lg:col-span-2">
+                            <label class="block text-xs text-slate-400 mb-1">💳 Cartão (compõe a fatura)</label>
+                            <select id="inpCartao" onchange="this.dataset.semCartao = this.value === '' ? '1' : ''; atualizarCampoCartao()" class="w-full rounded px-3 py-1.5 text-sm"></select>
+                        </div>
+                        <div id="txtFaturaPrevia" class="lg:col-span-5 text-xs text-slate-400 pb-2"></div>
+                    </div>
+
                     <!-- Recorrência -->
                     <div class="sm:col-span-2 lg:col-span-7 border-t border-slate-800 pt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end">
                         <div>
@@ -274,6 +284,130 @@
                         </thead>
                         <tbody id="tbody-lancamentos" class="divide-y divide-slate-800"></tbody>
                     </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==========================================
+             ABA: CARTÕES DE CRÉDITO E FATURAS
+             ========================================== -->
+        <section id="view-cartoes" class="hidden space-y-6">
+            <!-- Cartões cadastrados -->
+            <div id="listaCartoes" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+
+            <!-- Cadastro / edição de cartão -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div class="flex items-center justify-between mb-3">
+                    <h2 id="tituloFormCartao" class="text-sm font-semibold text-sky-400 uppercase tracking-wider">➕ Novo Cartão</h2>
+                    <span class="text-xs text-slate-400">A fatura de cada compra é calculada pelo dia de fechamento</span>
+                </div>
+                <form id="formCartao" onsubmit="salvarCartao(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+                    <input type="hidden" id="cartaoEditId">
+                    <div class="lg:col-span-2">
+                        <label class="block text-xs text-slate-400 mb-1">Nome *</label>
+                        <input type="text" id="cartaoNome" required placeholder="Ex: Nubank, Itaú Visa..." class="w-full rounded px-3 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Dia do fechamento *</label>
+                        <input type="number" id="cartaoFech" required min="1" max="31" placeholder="Ex: 3" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Dia do vencimento *</label>
+                        <input type="number" id="cartaoVenc" required min="1" max="31" placeholder="Ex: 10" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Limite (R$)</label>
+                        <input type="number" id="cartaoLimite" min="0" step="0.01" placeholder="0.00" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div class="flex gap-2 justify-end">
+                        <button type="button" id="btnCancelarCartao" onclick="cancelarEdicaoCartao()" class="hidden px-3 py-2 rounded text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition">Cancelar</button>
+                        <button type="submit" id="btnSalvarCartao" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition">💾 Cadastrar</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Linha do tempo das faturas -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap gap-2 justify-between items-center">
+                    <h2 class="text-sm font-semibold text-white">🗓 Faturas por mês de vencimento</h2>
+                    <span class="text-xs text-slate-400">Clique em uma fatura para abrir • use ◀ ▶ no topo para mover o período</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse table-compact">
+                        <thead>
+                            <tr class="bg-slate-800 text-slate-300 text-right">
+                                <th class="text-left">Cartão</th>
+                                <th data-meses-janela class="hidden"></th>
+                                <th class="bg-slate-700 text-white">TOTAL 12 MESES</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbody-faturas" class="divide-y divide-slate-800 text-right"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Detalhe da fatura -->
+            <div id="painelFatura" class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h2 class="text-sm font-semibold text-white mr-1">🧾 Fatura</h2>
+                        <select id="faturaCartao" onchange="carregarFatura()" class="rounded px-2.5 py-1 text-sm font-semibold"></select>
+                        <button type="button" onclick="navegarFatura(-1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Fatura anterior">◀</button>
+                        <span id="faturaLabel" class="text-sm font-mono text-white min-w-[64px] text-center">—</span>
+                        <button type="button" onclick="navegarFatura(1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Próxima fatura">▶</button>
+                        <button type="button" onclick="irFaturaAtual()" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">Atual</button>
+                        <span id="faturaStatus"></span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2" id="boxPagamento"></div>
+                </div>
+
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="bg-slate-800/50 rounded-lg p-3"><span class="text-xs text-slate-400">Total da fatura</span><div id="faturaTotal" class="text-xl font-bold text-rose-400">R$ 0,00</div></div>
+                    <div class="bg-slate-800/50 rounded-lg p-3"><span class="text-xs text-slate-400">Fechamento</span><div id="faturaFech" class="text-lg font-mono text-white">—</div></div>
+                    <div class="bg-slate-800/50 rounded-lg p-3"><span class="text-xs text-slate-400">Vencimento</span><div id="faturaVenc" class="text-lg font-mono text-white">—</div></div>
+                    <div class="bg-slate-800/50 rounded-lg p-3"><span class="text-xs text-slate-400">Compras</span><div id="faturaQtd" class="text-lg font-mono text-white">0</div></div>
+                </div>
+
+                <!-- Lançar compra rapidamente neste cartão -->
+                <form id="formCompraCartao" onsubmit="lancarCompraCartao(event)" class="grid grid-cols-2 lg:grid-cols-7 gap-3 items-end border border-slate-800 rounded-lg p-3">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Data da compra *</label>
+                        <input type="date" id="compraData" required class="w-full rounded px-3 py-1.5 text-sm">
+                    </div>
+                    <div class="lg:col-span-2">
+                        <label class="block text-xs text-slate-400 mb-1">Descrição *</label>
+                        <input type="text" id="compraDescricao" required placeholder="Ex: Mercado, Farmácia, Passagem..." class="w-full rounded px-3 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Categoria *</label>
+                        <select id="compraCategoria" required class="w-full rounded px-3 py-1.5 text-sm"></select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Valor total (R$) *</label>
+                        <input type="number" id="compraValor" required min="0.01" step="0.01" placeholder="0.00" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Parcelas</label>
+                        <input type="number" id="compraParcelas" min="1" max="120" step="1" value="1" class="w-full rounded px-3 py-1.5 text-sm font-mono" title="1 = à vista">
+                    </div>
+                    <div class="col-span-2 lg:col-span-1 flex justify-end">
+                        <button type="submit" class="w-full bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition">➕ Lançar compra</button>
+                    </div>
+                </form>
+
+                <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                    <div class="lg:col-span-3 overflow-x-auto border border-slate-800 rounded-lg">
+                        <table class="w-full text-left border-collapse table-compact">
+                            <thead class="bg-slate-800 text-slate-300">
+                                <tr><th>Data compra</th><th>Descrição</th><th>Categoria</th><th class="text-center">Parcela</th><th class="text-right">Valor (R$)</th><th class="text-center">Ação</th></tr>
+                            </thead>
+                            <tbody id="tbody-fatura-itens" class="divide-y divide-slate-800"></tbody>
+                        </table>
+                    </div>
+                    <div class="border border-slate-800 rounded-lg p-3">
+                        <h3 class="text-xs uppercase text-slate-400 font-semibold mb-2">Por categoria</h3>
+                        <div id="faturaPorCategoria" class="space-y-2 text-sm"></div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -828,7 +962,7 @@
 
         // Alternância de Abas
         function switchTab(tab) {
-            ['dashboard', 'lancamentos', 'categorias', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
+            ['dashboard', 'lancamentos', 'cartoes', 'categorias', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
                 const el = document.getElementById('view-' + t);
                 if (el) el.classList.add('hidden');
                 const btn = document.getElementById('tab-' + t);
@@ -855,6 +989,7 @@
 
         async function reloadAll() {
             await Promise.all([
+                carregarCartoes(),
                 carregarCategorias(),
                 carregarDashboard(),
                 carregarLancamentos(),
@@ -870,6 +1005,7 @@
             const res = await fetch('/api/categorias');
             categoriasCache = await res.json();
             atualizarDropdownCategorias();
+            popularCategoriasCompra();
             atualizarKpisCategorias();
             atualizarFiltroMacroCategorias();
             filtrarCategorias();
@@ -1379,7 +1515,7 @@
                         ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300" title="Lançamento recorrente">🔁 ${r.parcela_num}/${r.parcela_total}</span>`
                         : ''}</td>
                     <td class="text-right font-mono ${valCls}">${fmtBRL(r.valor)}</td>
-                    <td class="text-slate-300 text-xs">${r.forma_pgto}</td>
+                    <td class="text-slate-300 text-xs">${r.forma_pgto}${r.cartao_nome ? ` <span class="text-violet-300">· 💳 ${r.cartao_nome}</span>` : ''}</td>
                     <td class="text-slate-400 text-xs">${r.observacao}</td>
                     <td class="text-center">
                         <button onclick="removerLancamento(${r.id})" class="text-slate-500 hover:text-rose-400 px-2 py-0.5 text-xs transition" title="Excluir">🗑️</button>
@@ -1403,6 +1539,9 @@
                 forma_pgto: document.getElementById('inpFormaPgto').value,
                 observacao: document.getElementById('inpObs').value
             };
+
+            const cartaoSel = cartaoSelecionadoNoForm();
+            if (cartaoSel) payload.cartao_id = cartaoSel;
 
             const frequencia = document.getElementById('inpFrequencia').value;
             if (frequencia) {
@@ -1431,11 +1570,15 @@
                 document.getElementById('inpFrequencia').value = '';
                 atualizarCamposRecorrencia();
                 await reloadAll();
+                const ini = periodosAtuais[0].chave, fim = periodosAtuais[11].chave;
+                const foraDaJanela = out.primeira_competencia < ini || out.ultima_competencia > fim;
+                const avisoJanela = 'use ◀ ▶ no topo para puxar ou empurrar a linha do tempo.';
                 if (out.quantidade > 1) {
-                    const ini = periodosAtuais[0].chave, fim = periodosAtuais[11].chave;
-                    const foraDaJanela = out.primeira_data.slice(0, 7) < ini || out.ultima_data.slice(0, 7) > fim;
                     alert(`${out.quantidade} lançamentos gerados de ${fmtData(out.primeira_data)} até ${fmtData(out.ultima_data)}.`
-                        + (foraDaJanela ? '\n\nAlgumas ocorrências ficam fora do período exibido — use ◀ ▶ no topo para puxar ou empurrar a linha do tempo.' : ''));
+                        + (foraDaJanela ? `\n\nAlgumas ocorrências ficam fora do período exibido — ${avisoJanela}` : ''));
+                } else if (foraDaJanela) {
+                    const [a, m] = out.primeira_competencia.split('-').map(Number);
+                    alert(`Lançamento registrado em ${MESES_NOME[m - 1]}/${a}, fora do período exibido — ${avisoJanela}`);
                 }
             } else {
                 const err = await res.json();
@@ -1444,7 +1587,7 @@
         }
 
         async function removerLancamento(id) {
-            const lanc = lancamentosCache.find(l => l.id === id);
+            const lanc = lancamentosCache.find(l => l.id === id) || (faturaAtualCache?.itens || []).find(l => l.id === id);
             if (lanc && lanc.recorrencia_id) {
                 lancamentoExcluirId = id;
                 document.getElementById('txtExcluirRecorrente').textContent =
@@ -1500,7 +1643,340 @@
                                  trimestral: 'trimestrais', semestral: 'semestrais', anual: 'anuais' };
             resumo.innerHTML = `Serão gerados <strong class="text-white">${qtd}</strong> lançamentos ${FREQ_LABEL[freq]} de `
                 + `<strong class="text-white">${fmtBRL(porOcorrencia)}</strong> `
-                + `(total <strong class="text-white">${fmtBRL(total)}</strong>).`;
+                + `(total <strong class="text-white">${fmtBRL(total)}</strong>).`
+                + (cartaoSelecionadoNoForm() && modo === 'parcelar' ? ' Uma parcela em cada fatura seguinte.' : '');
+        }
+
+        // ==========================================
+        // CARTÕES DE CRÉDITO E FATURAS
+        // ==========================================
+        let cartoesCache = [];
+        let faturaAtualCache = null;
+        let faturaSel = null; // { cartao_id, ano, mes }
+
+        const STATUS_FATURA = {
+            aberta:  { txt: 'Aberta',  cls: 'bg-sky-500/20 text-sky-300' },
+            fechada: { txt: 'Fechada', cls: 'bg-amber-500/20 text-amber-300' },
+            vencida: { txt: 'Vencida', cls: 'bg-rose-500/20 text-rose-300' },
+            paga:    { txt: 'Paga',    cls: 'bg-emerald-500/20 text-emerald-300' }
+        };
+        const badgeStatus = (st) => `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${STATUS_FATURA[st].cls}">${STATUS_FATURA[st].txt}</span>`;
+        const escHtml = (t) => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+        async function carregarCartoes() {
+            const res = await fetch('/api/cartoes');
+            cartoesCache = await res.json();
+            renderizarCartoes();
+            popularSelectsCartao();
+            atualizarCampoCartao();
+            await Promise.all([carregarResumoFaturas(), carregarFatura()]);
+        }
+
+        function renderizarCartoes() {
+            const el = document.getElementById('listaCartoes');
+            if (!cartoesCache.length) {
+                el.innerHTML = `<div class="md:col-span-2 xl:col-span-3 bg-slate-900 border border-dashed border-slate-700 rounded-xl p-6 text-center text-sm text-slate-400">
+                    Nenhum cartão cadastrado ainda. Cadastre abaixo para começar a lançar compras e montar faturas.</div>`;
+                return;
+            }
+            el.innerHTML = cartoesCache.map(c => {
+                const fa = c.fatura_atual;
+                const pct = c.limite > 0 ? Math.min(100, (c.limite_usado / c.limite) * 100) : 0;
+                const corBarra = pct > 90 ? 'bg-rose-500' : pct > 70 ? 'bg-amber-500' : 'bg-sky-500';
+                return `<div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div class="flex items-start justify-between gap-2">
+                        <div>
+                            <div class="text-base font-bold text-white">💳 ${escHtml(c.nome)}</div>
+                            <div class="text-xs text-slate-400">Fecha dia ${c.dia_fechamento} • vence dia ${c.dia_vencimento}</div>
+                        </div>
+                        <div class="flex gap-1">
+                            <button onclick="editarCartao(${c.id})" class="text-slate-400 hover:text-sky-400 p-1 rounded hover:bg-slate-800" title="Editar">✏️</button>
+                            <button onclick="excluirCartao(${c.id})" class="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800" title="Excluir">🗑️</button>
+                        </div>
+                    </div>
+                    <button onclick="abrirFatura(${c.id}, ${fa.ano}, ${fa.mes})" class="w-full text-left bg-slate-800/60 hover:bg-slate-800 rounded-lg p-3 transition">
+                        <div class="flex items-center justify-between text-xs text-slate-400">
+                            <span>Fatura atual • ${fa.label} (vence ${fmtData(fa.vencimento)})</span>${badgeStatus(fa.status)}
+                        </div>
+                        <div class="text-xl font-bold text-rose-400 mt-1">${fmtBRL(fa.total)}</div>
+                        <div class="text-[11px] text-slate-500">Compras até ${fmtData(fa.fechamento)} (exclusive) entram nela</div>
+                    </button>
+                    ${c.limite > 0 ? `<div>
+                        <div class="flex justify-between text-xs text-slate-400 mb-1"><span>Limite usado ${fmtBRL(c.limite_usado)}</span><span>Disponível <strong class="${c.limite_disponivel < 0 ? 'text-rose-400' : 'text-emerald-400'}">${fmtBRL(c.limite_disponivel)}</strong></span></div>
+                        <div class="h-2 bg-slate-800 rounded-full overflow-hidden"><div class="h-full ${corBarra}" style="width:${pct.toFixed(1)}%"></div></div>
+                    </div>` : `<div class="text-xs text-slate-500">Em aberto (todas as faturas não pagas): ${fmtBRL(c.limite_usado)}</div>`}
+                </div>`;
+            }).join('');
+        }
+
+        function popularSelectsCartao() {
+            const opts = cartoesCache.map(c => `<option value="${c.id}">${escHtml(c.nome)}</option>`).join('');
+            const selForm = document.getElementById('inpCartao');
+            const antesForm = selForm.value;
+            selForm.innerHTML = opts + '<option value="">— Sem cartão (não compõe fatura) —</option>';
+            const manter = cartoesCache.some(c => String(c.id) === antesForm) || (antesForm === '' && selForm.dataset.semCartao === '1');
+            selForm.value = manter ? antesForm : (cartoesCache[0]?.id ?? '');
+
+            const selFat = document.getElementById('faturaCartao');
+            selFat.innerHTML = opts || '<option value="">Nenhum cartão</option>';
+            if (faturaSel && cartoesCache.some(c => c.id === faturaSel.cartao_id)) {
+                selFat.value = faturaSel.cartao_id;
+            } else if (cartoesCache.length) {
+                const c = cartoesCache[0];
+                faturaSel = { cartao_id: c.id, ano: c.fatura_atual.ano, mes: c.fatura_atual.mes };
+                selFat.value = c.id;
+            } else {
+                faturaSel = null;
+            }
+
+            popularCategoriasCompra();
+            const inpData = document.getElementById('compraData');
+            if (!inpData.value) inpData.value = hojeISO();
+        }
+
+        function popularCategoriasCompra() {
+            const selCat = document.getElementById('compraCategoria');
+            const antesCat = selCat.value;
+            selCat.innerHTML = categoriasCache.filter(c => c.tipo === 'Despesa')
+                .map(c => `<option value="${escHtml(c.nome)}">${escHtml(c.nome)}</option>`).join('');
+            if (antesCat && categoriasCache.some(c => c.nome === antesCat)) selCat.value = antesCat;
+        }
+
+        // Formulário principal: cartão só aparece para Despesa paga no Crédito
+        function cartaoSelecionadoNoForm() {
+            const visivel = !document.getElementById('boxCartao').classList.contains('hidden');
+            const v = document.getElementById('inpCartao').value;
+            return visivel && v ? parseInt(v, 10) : null;
+        }
+
+        let _previaFaturaSeq = 0;
+        async function atualizarCampoCartao() {
+            const credito = document.getElementById('inpFormaPgto').value === 'Crédito'
+                && document.getElementById('inpTipo').value === 'Despesa';
+            document.getElementById('boxCartao').classList.toggle('hidden', !credito);
+            atualizarCamposRecorrencia();
+            const txt = document.getElementById('txtFaturaPrevia');
+            if (!credito) return;
+            if (!cartoesCache.length) {
+                txt.innerHTML = 'Nenhum cartão cadastrado — <button type="button" onclick="switchTab(\'cartoes\')" class="text-sky-400 hover:underline">cadastre um na aba Cartões</button> para a compra compor uma fatura.';
+                return;
+            }
+            const cartaoId = cartaoSelecionadoNoForm();
+            const data = document.getElementById('inpData').value;
+            if (!cartaoId || !data) { txt.textContent = 'Compra no crédito sem cartão: não entra em nenhuma fatura.'; return; }
+            const seq = ++_previaFaturaSeq;
+            const res = await fetch(`/api/cartoes/${cartaoId}/fatura-da-compra?data=${data}`);
+            if (seq !== _previaFaturaSeq || !res.ok) return;
+            const f = await res.json();
+            txt.innerHTML = `Entra na fatura <strong class="text-white">${f.label}</strong> do ${escHtml(f.cartao)} `
+                + `(fecha ${fmtData(f.fechamento)}, vence ${fmtData(f.vencimento)}) e conta como despesa de `
+                + `<strong class="text-white">${MESES_NOME[f.mes - 1]}/${f.ano}</strong>. ${badgeStatus(f.status)}`;
+        }
+
+        async function salvarCartao(e) {
+            e.preventDefault();
+            const id = document.getElementById('cartaoEditId').value;
+            const payload = {
+                nome: document.getElementById('cartaoNome').value,
+                dia_fechamento: parseInt(document.getElementById('cartaoFech').value, 10),
+                dia_vencimento: parseInt(document.getElementById('cartaoVenc').value, 10),
+                limite: parseFloat(document.getElementById('cartaoLimite').value || 0)
+            };
+            const res = await fetch(id ? `/api/cartoes/${id}` : '/api/cartoes', {
+                method: id ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert('Erro ao salvar cartão: ' + (typeof err.detail === 'string' ? err.detail : 'verifique os campos.'));
+                return;
+            }
+            const out = await res.json();
+            cancelarEdicaoCartao();
+            if (!id) faturaSel = null;
+            await carregarCartoes();
+            if (!id) {
+                const c = cartoesCache.find(x => x.id === out.id);
+                if (c) abrirFatura(c.id, c.fatura_atual.ano, c.fatura_atual.mes, false);
+            }
+        }
+
+        function editarCartao(id) {
+            const c = cartoesCache.find(x => x.id === id);
+            if (!c) return;
+            document.getElementById('cartaoEditId').value = c.id;
+            document.getElementById('cartaoNome').value = c.nome;
+            document.getElementById('cartaoFech').value = c.dia_fechamento;
+            document.getElementById('cartaoVenc').value = c.dia_vencimento;
+            document.getElementById('cartaoLimite').value = c.limite || '';
+            document.getElementById('tituloFormCartao').textContent = `✏️ Editando cartão: ${c.nome}`;
+            document.getElementById('btnSalvarCartao').textContent = '💾 Salvar alterações';
+            document.getElementById('btnCancelarCartao').classList.remove('hidden');
+            document.getElementById('formCartao').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function cancelarEdicaoCartao() {
+            document.getElementById('formCartao').reset();
+            document.getElementById('cartaoEditId').value = '';
+            document.getElementById('tituloFormCartao').textContent = '➕ Novo Cartão';
+            document.getElementById('btnSalvarCartao').textContent = '💾 Cadastrar';
+            document.getElementById('btnCancelarCartao').classList.add('hidden');
+        }
+
+        async function excluirCartao(id) {
+            const c = cartoesCache.find(x => x.id === id);
+            if (!c || !confirm(`Excluir o cartão "${c.nome}"?`)) return;
+            const res = await fetch(`/api/cartoes/${id}`, { method: 'DELETE' });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert(err.detail || 'Não foi possível excluir.');
+                return;
+            }
+            await reloadAll();
+        }
+
+        // Linha do tempo de faturas (segue a janela global de 12 meses)
+        async function carregarResumoFaturas() {
+            const tbody = document.getElementById('tbody-faturas');
+            if (!cartoesCache.length) { tbody.innerHTML = ''; return; }
+            const res = await fetch(`/api/faturas?${qsPeriodo()}`);
+            const data = await res.json();
+            const linhas = data.linhas.map(l => {
+                const cols = l.faturas.map(f => {
+                    const ativa = faturaSel && faturaSel.cartao_id === l.cartao_id && faturaSel.ano === f.ano && faturaSel.mes === f.mes;
+                    const cor = f.total === 0 ? 'text-slate-600' : f.status === 'paga' ? 'text-emerald-400' : f.status === 'vencida' ? 'text-rose-400' : f.status === 'fechada' ? 'text-amber-300' : 'text-slate-200';
+                    return `<td class="cursor-pointer hover:bg-slate-800 ${ativa ? 'ring-1 ring-inset ring-sky-400 bg-slate-800/60' : ''} ${cor}"
+                        title="${escHtml(l.cartao)} • ${f.label} • ${STATUS_FATURA[f.status].txt} • vence ${fmtData(f.vencimento)}"
+                        onclick="abrirFatura(${l.cartao_id}, ${f.ano}, ${f.mes})">${fmtNum(f.total)}${f.status === 'paga' && f.total > 0 ? ' ✓' : ''}</td>`;
+                }).join('');
+                return `<tr class="hover:bg-slate-800/30"><td class="text-left font-medium text-white">💳 ${escHtml(l.cartao)}</td>${cols}<td class="bg-slate-800/50 font-semibold text-white">${fmtBRL(l.total)}</td></tr>`;
+            });
+            if (data.linhas.length > 1) {
+                linhas.push(`<tr class="bg-slate-800/40 font-semibold"><td class="text-left text-slate-300">Total cartões</td>${data.totais_mes.map(v => `<td class="text-rose-300">${fmtNum(v)}</td>`).join('')}<td class="bg-slate-800 text-white">${fmtBRL(data.totais_mes.reduce((a, b) => a + b, 0))}</td></tr>`);
+            }
+            tbody.innerHTML = linhas.join('');
+        }
+
+        function abrirFatura(cartaoId, ano, mes, rolar = true) {
+            faturaSel = { cartao_id: cartaoId, ano, mes };
+            document.getElementById('faturaCartao').value = cartaoId;
+            switchTab('cartoes');
+            carregarFatura();
+            carregarResumoFaturas();
+            if (rolar) document.getElementById('painelFatura').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function navegarFatura(delta) {
+            if (!faturaSel) return;
+            const t = faturaSel.ano * 12 + (faturaSel.mes - 1) + delta;
+            abrirFatura(faturaSel.cartao_id, Math.floor(t / 12), (t % 12) + 1, false);
+        }
+
+        function irFaturaAtual() {
+            const c = cartoesCache.find(x => x.id === faturaSel?.cartao_id);
+            if (c) abrirFatura(c.id, c.fatura_atual.ano, c.fatura_atual.mes, false);
+        }
+
+        async function carregarFatura() {
+            const painel = document.getElementById('painelFatura');
+            const selId = parseInt(document.getElementById('faturaCartao').value, 10);
+            if (!cartoesCache.length || !selId) { painel.classList.add('hidden'); faturaAtualCache = null; return; }
+            painel.classList.remove('hidden');
+            if (!faturaSel || faturaSel.cartao_id !== selId) {
+                const c = cartoesCache.find(x => x.id === selId);
+                faturaSel = { cartao_id: selId, ano: c.fatura_atual.ano, mes: c.fatura_atual.mes };
+                carregarResumoFaturas();
+            }
+            const { cartao_id, ano, mes } = faturaSel;
+            const res = await fetch(`/api/cartoes/${cartao_id}/faturas/${ano}/${mes}`);
+            if (!res.ok) return;
+            const f = await res.json();
+            faturaAtualCache = f;
+
+            document.getElementById('faturaLabel').textContent = `${MESES_ABREV[f.mes - 1]}/${f.ano}`;
+            document.getElementById('faturaStatus').innerHTML = badgeStatus(f.status);
+            document.getElementById('faturaTotal').textContent = fmtBRL(f.total);
+            document.getElementById('faturaFech').textContent = fmtData(f.fechamento);
+            document.getElementById('faturaVenc').textContent = fmtData(f.vencimento);
+            document.getElementById('faturaQtd').textContent = f.quantidade;
+
+            document.getElementById('boxPagamento').innerHTML = f.paga
+                ? `<span class="text-xs text-emerald-300">Paga em ${fmtData(f.data_pagamento)}</span>
+                   <button onclick="reabrirFatura()" class="px-3 py-1.5 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Desfazer pagamento</button>`
+                : `<label class="text-xs text-slate-400">Pago em</label>
+                   <input type="date" id="faturaDataPag" value="${hojeISO()}" class="rounded px-2 py-1 text-xs">
+                   <button onclick="pagarFatura()" ${f.total <= 0 ? 'disabled' : ''} class="px-3 py-1.5 rounded text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 disabled:opacity-40 disabled:cursor-not-allowed">✓ Marcar como paga</button>`;
+
+            document.getElementById('tbody-fatura-itens').innerHTML = f.itens.length
+                ? f.itens.map(i => `<tr class="hover:bg-slate-800/50">
+                    <td class="font-mono text-xs text-slate-300">${fmtData(i.data)}</td>
+                    <td class="text-white">${escHtml(i.descricao)}</td>
+                    <td class="text-slate-300 text-xs">${escHtml(i.categoria)}</td>
+                    <td class="text-center">${i.parcela_total ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300">${i.parcela_num}/${i.parcela_total}</span>` : '<span class="text-slate-600 text-xs">à vista</span>'}</td>
+                    <td class="text-right font-mono text-rose-400 font-semibold">${fmtBRL(i.valor)}</td>
+                    <td class="text-center"><button onclick="removerLancamento(${i.id})" class="text-slate-500 hover:text-rose-400 px-2 py-0.5 text-xs" title="Excluir">🗑️</button></td>
+                </tr>`).join('')
+                : '<tr><td colspan="6" class="text-center text-slate-500 py-6">Nenhuma compra nesta fatura.</td></tr>';
+
+            document.getElementById('faturaPorCategoria').innerHTML = f.por_categoria.length
+                ? f.por_categoria.map(c => {
+                    const pct = f.total > 0 ? (c.total / f.total) * 100 : 0;
+                    return `<div><div class="flex justify-between text-xs"><span class="text-slate-300 truncate pr-2">${escHtml(c.categoria)}</span><span class="font-mono text-slate-200">${fmtBRL(c.total)}</span></div>
+                        <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden mt-1"><div class="h-full bg-rose-500/70" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+                }).join('')
+                : '<div class="text-xs text-slate-500">—</div>';
+        }
+
+        async function pagarFatura() {
+            const { cartao_id, ano, mes } = faturaSel;
+            const data_pagamento = document.getElementById('faturaDataPag')?.value || null;
+            await fetch(`/api/cartoes/${cartao_id}/faturas/${ano}/${mes}/pagar`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data_pagamento })
+            });
+            await carregarCartoes();
+        }
+
+        async function reabrirFatura() {
+            const { cartao_id, ano, mes } = faturaSel;
+            await fetch(`/api/cartoes/${cartao_id}/faturas/${ano}/${mes}/pagar`, { method: 'DELETE' });
+            await carregarCartoes();
+        }
+
+        // Lançamento rápido de compra direto no cartão selecionado
+        async function lancarCompraCartao(e) {
+            e.preventDefault();
+            const parcelas = parseInt(document.getElementById('compraParcelas').value, 10) || 1;
+            if (parcelas < 1 || parcelas > 120) { alert('Parcelas deve ficar entre 1 e 120.'); return; }
+            const payload = {
+                data: document.getElementById('compraData').value,
+                tipo: 'Despesa',
+                categoria: document.getElementById('compraCategoria').value,
+                descricao: document.getElementById('compraDescricao').value,
+                valor: parseFloat(document.getElementById('compraValor').value),
+                forma_pgto: 'Crédito',
+                observacao: '',
+                cartao_id: faturaSel.cartao_id
+            };
+            if (parcelas > 1) payload.recorrencia = { frequencia: 'mensal', ocorrencias: parcelas, modo: 'parcelar' };
+            const res = await fetch('/api/lancamentos', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert('Erro ao lançar compra: ' + (typeof err.detail === 'string' ? err.detail : 'verifique os campos.'));
+                return;
+            }
+            const out = await res.json();
+            document.getElementById('compraDescricao').value = '';
+            document.getElementById('compraValor').value = '';
+            document.getElementById('compraParcelas').value = 1;
+            // Mostra a fatura onde a compra (1ª parcela) caiu
+            const [a, m] = out.primeira_competencia.split('-').map(Number);
+            faturaSel = { cartao_id: payload.cartao_id, ano: a, mes: m };
+            await reloadAll();
+            document.getElementById('compraDescricao').focus();
         }
 
         // 3. Orçamento vs Realizado
