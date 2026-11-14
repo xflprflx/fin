@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 
+
 def get_db_connection():
     """Retorna uma conexão SQLite configurada com Row factory para retorno em formato dict."""
     conn = sqlite3.connect(DB_PATH)
@@ -32,9 +33,186 @@ def get_db_connection():
     return conn
 
 
+def init_db():
+    """Inicializa as tabelas do banco de dados e popula categorias/configurações padrão caso estejam vazias."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.executescript("""
+        CREATE TABLE IF NOT EXISTS categorias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE,
+            tipo TEXT NOT NULL,
+            macro_categoria TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS lancamentos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            mes INTEGER NOT NULL,
+            ano INTEGER NOT NULL,
+            tipo TEXT NOT NULL,
+            categoria TEXT NOT NULL,
+            descricao TEXT,
+            valor REAL NOT NULL,
+            forma_pgto TEXT,
+            observacao TEXT,
+            competencia TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS orcamento (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            macro_categoria TEXT NOT NULL,
+            ano INTEGER NOT NULL,
+            mes INTEGER NOT NULL,
+            valor_orcado REAL DEFAULT 0.0,
+            UNIQUE(macro_categoria, ano, mes)
+        );
+
+        CREATE TABLE IF NOT EXISTS investimentos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ativo TEXT NOT NULL,
+            classe TEXT NOT NULL,
+            saldo_inicial REAL DEFAULT 0.0,
+            saldo_atual REAL DEFAULT 0.0,
+            rentabilidade_pct REAL DEFAULT 0.0
+        );
+
+        CREATE TABLE IF NOT EXISTS dividas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            credor TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            saldo_devedor REAL DEFAULT 0.0,
+            taxa_juros_mes REAL DEFAULT 0.0,
+            parcela_min REAL DEFAULT 0.0,
+            parcelas_rest INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS metas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            prazo TEXT NOT NULL,
+            valor_alvo REAL DEFAULT 0.0,
+            valor_atual REAL DEFAULT 0.0
+        );
+
+        CREATE TABLE IF NOT EXISTS reserva_config (
+            id INTEGER PRIMARY KEY,
+            despesa_media_manual REAL DEFAULT 0.0,
+            usar_media_automatica INTEGER DEFAULT 1,
+            meses_seguranca INTEGER DEFAULT 6,
+            saldo_atual_reserva REAL DEFAULT 0.0
+        );
+    """)
+
+    # Garante configuração inicial da reserva de emergência
+    row_res = cur.execute("SELECT id FROM reserva_config WHERE id = 1").fetchone()
+    if not row_res:
+        cur.execute(
+            "INSERT INTO reserva_config (id, despesa_media_manual, usar_media_automatica, meses_seguranca, saldo_atual_reserva) VALUES (1, 0.0, 1, 6, 0.0)"
+        )
+
+    # Popula categorias padrão se tabela vazia
+    qtd_cat = cur.execute("SELECT COUNT(*) FROM categorias").fetchone()[0]
+    if qtd_cat == 0:
+        categorias_padrao = [
+            # Despesas
+            ("Aluguel / Condomínio", "Despesa", "Moradia"),
+            ("Energia Elétrica", "Despesa", "Moradia"),
+            ("Água e Saneamento", "Despesa", "Moradia"),
+            ("Internet / TV", "Despesa", "Moradia"),
+            ("Manutenção da Casa", "Despesa", "Moradia"),
+            ("Supermercado", "Despesa", "Alimentação"),
+            ("Feira / Hortifrúti", "Despesa", "Alimentação"),
+            ("Restaurantes / Bares", "Despesa", "Alimentação"),
+            ("Delivery / Lanches", "Despesa", "Alimentação"),
+            ("Combustível", "Despesa", "Transporte"),
+            ("Transporte Público / Uber", "Despesa", "Transporte"),
+            ("Manutenção Veículo", "Despesa", "Transporte"),
+            ("Seguro / IPVA", "Despesa", "Transporte"),
+            ("Plano de Saúde", "Despesa", "Saúde"),
+            ("Farmácia / Medicamentos", "Despesa", "Saúde"),
+            ("Consultas e Exames", "Despesa", "Saúde"),
+            ("Escola / Faculdade", "Despesa", "Educação"),
+            ("Cursos / Treinamentos", "Despesa", "Educação"),
+            ("Livros e Material", "Despesa", "Educação"),
+            ("Viagens / Turismo", "Despesa", "Lazer"),
+            ("Streaming / Assinaturas", "Despesa", "Lazer"),
+            ("Cinema / Eventos", "Despesa", "Lazer"),
+            ("Roupas e Calçados", "Despesa", "Vestuário"),
+            ("Acessórios e Beleza", "Despesa", "Vestuário"),
+            ("Cabeleireiro / Barbeiro", "Despesa", "Pessoal"),
+            ("Academia / Esportes", "Despesa", "Pessoal"),
+            ("Tarifas e Anuidade", "Despesa", "Financeiro"),
+            ("Juros e Empréstimos", "Despesa", "Financeiro"),
+            ("Aportes e Investimentos", "Despesa", "Poupança/Investimentos"),
+            ("Doações e Presentes", "Despesa", "Outros"),
+            ("Outros Gastos", "Despesa", "Outros"),
+            # Receitas
+            ("Salário Líquido", "Receita", "Renda Principal"),
+            ("Pró-labore", "Receita", "Renda Principal"),
+            ("13º Salário", "Receita", "Renda Principal"),
+            ("Férias", "Receita", "Renda Principal"),
+            ("Freelance / Bicos", "Receita", "Renda Extra"),
+            ("Vendas / Comissões", "Receita", "Renda Extra"),
+            ("Rendimentos Investimentos", "Receita", "Investimentos"),
+            ("Aluguéis Recebidos", "Receita", "Investimentos"),
+            ("Restituição IR / Reembolso", "Receita", "Outras Receitas"),
+            ("Outras Entradas", "Receita", "Outras Receitas"),
+        ]
+        cur.executemany("INSERT INTO categorias (nome, tipo, macro_categoria) VALUES (?, ?, ?)", categorias_padrao)
+
+    # Popula investimentos padrão se vazio
+    qtd_inv = cur.execute("SELECT COUNT(*) FROM investimentos").fetchone()[0]
+    if qtd_inv == 0:
+        inv_padrao = [
+            ("Tesouro Selic 2029", "Renda Fixa", 15000.0, 15650.0, 4.33),
+            ("CDB 110% CDI Liquidez Diária", "Renda Fixa", 10000.0, 10420.0, 4.20),
+            ("Fundo Imobiliário KNCR11", "FIIs", 8000.0, 8350.0, 4.38),
+        ]
+        cur.executemany("INSERT INTO investimentos (ativo, classe, saldo_inicial, saldo_atual, rentabilidade_pct) VALUES (?, ?, ?, ?, ?)", inv_padrao)
+
+    # Popula dividas padrão se vazio
+    qtd_div = cur.execute("SELECT COUNT(*) FROM dividas").fetchone()[0]
+    if qtd_div == 0:
+        div_padrao = [
+            ("Cartão de Crédito", "Rotativo", 1200.0, 12.5, 600.0, 2),
+            ("Financiamento Veicular", "CDC", 18500.0, 1.89, 780.0, 28),
+        ]
+        cur.executemany("INSERT INTO dividas (credor, tipo, saldo_devedor, taxa_juros_mes, parcela_min, parcelas_rest) VALUES (?, ?, ?, ?, ?, ?)", div_padrao)
+
+    # Popula metas padrão se vazio
+    qtd_metas = cur.execute("SELECT COUNT(*) FROM metas").fetchone()[0]
+    if qtd_metas == 0:
+        metas_padrao = [
+            ("Viagem de Férias", "Dezembro/2026", 8000.0, 2500.0),
+            ("Troca de Carro", "Julho/2027", 35000.0, 10000.0),
+            ("Pós-Graduação", "Janeiro/2027", 12000.0, 4000.0),
+        ]
+        cur.executemany("INSERT INTO metas (nome, prazo, valor_alvo, valor_atual) VALUES (?, ?, ?, ?)", metas_padrao)
+
+    conn.commit()
+    conn.close()
+
+
+# Inicializa o banco de dados na inicialização
+init_db()
+
+
 # ==========================================
 # Modelos Pydantic (Validação Poka-Yoke)
 # ==========================================
+class CategoriaInput(BaseModel):
+    nome: str = Field(..., min_length=1, description="Nome da categoria")
+    tipo: str = Field(..., pattern="^(Receita|Despesa)$")
+    macro_categoria: str = Field(default="Outros")
+
+
+class CategoriaUpdateInput(BaseModel):
+    nome: str = Field(..., min_length=1, description="Nome da categoria")
+    tipo: str = Field(..., pattern="^(Receita|Despesa)$")
+    macro_categoria: str = Field(default="Outros")
+
+
 class LancamentoInput(BaseModel):
     data: str = Field(..., description="Data no formato YYYY-MM-DD")
     tipo: str = Field(..., pattern="^(Receita|Despesa)$")
@@ -94,13 +272,152 @@ def serve_frontend():
         return f.read()
 
 
+@app.get("/api/macro-categorias")
+def listar_macro_categorias():
+    """Retorna as macro-categorias padrão organizadas por tipo para filtros e formulários."""
+    return {
+        "Despesa": [
+            "Moradia",
+            "Alimentação",
+            "Transporte",
+            "Saúde",
+            "Educação",
+            "Lazer",
+            "Vestuário",
+            "Pessoal",
+            "Financeiro",
+            "Poupança/Investimentos",
+            "Outros",
+        ],
+        "Receita": [
+            "Renda Principal",
+            "Renda Extra",
+            "Investimentos",
+            "Benefícios",
+            "Outras Receitas",
+            "Outros",
+        ],
+    }
+
+
 @app.get("/api/categorias")
 def listar_categorias():
-    """Retorna todas as categorias separadas por tipo e macro-categoria para alimentar dropdowns."""
+    """Retorna todas as categorias com contagem de lançamentos associados (Poka-Yoke de integridade)."""
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM categorias ORDER BY tipo DESC, nome ASC").fetchall()
+    rows = conn.execute(
+        """
+        SELECT c.id, c.nome, c.tipo, c.macro_categoria,
+               COUNT(l.id) as total_lancamentos
+        FROM categorias c
+        LEFT JOIN lancamentos l ON c.nome = l.categoria
+        GROUP BY c.id, c.nome, c.tipo, c.macro_categoria
+        ORDER BY c.tipo DESC, c.macro_categoria ASC, c.nome ASC
+        """
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+@app.post("/api/categorias")
+def criar_categoria(payload: CategoriaInput):
+    """
+    Cadastra uma nova categoria no sistema.
+    Aplica validação Poka-Yoke para impedir nomes vazios e duplicados (case-insensitive).
+    """
+    nome_limpo = payload.nome.strip()
+    if not nome_limpo:
+        raise HTTPException(status_code=400, detail="O nome da categoria não pode estar em branco.")
+
+    macro_limpa = payload.macro_categoria.strip() or "Outros"
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    existe = cur.execute("SELECT id FROM categorias WHERE LOWER(nome) = LOWER(?)", (nome_limpo,)).fetchone()
+    if existe:
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"A categoria '{nome_limpo}' já está cadastrada.")
+
+    cur.execute(
+        "INSERT INTO categorias (nome, tipo, macro_categoria) VALUES (?, ?, ?)",
+        (nome_limpo, payload.tipo, macro_limpa),
+    )
+    conn.commit()
+    novo_id = cur.lastrowid
+    conn.close()
+    return {"status": "ok", "id": novo_id, "nome": nome_limpo, "tipo": payload.tipo, "macro_categoria": macro_limpa}
+
+
+@app.put("/api/categorias/{cat_id}")
+def atualizar_categoria(cat_id: int, payload: CategoriaUpdateInput):
+    """
+    Atualiza uma categoria existente.
+    Se o nome for alterado, sincroniza automaticamente todos os lançamentos históricos associados (Poka-Yoke).
+    """
+    nome_limpo = payload.nome.strip()
+    if not nome_limpo:
+        raise HTTPException(status_code=400, detail="O nome da categoria não pode estar em branco.")
+
+    macro_limpa = payload.macro_categoria.strip() or "Outros"
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cat = cur.execute("SELECT * FROM categorias WHERE id = ?", (cat_id,)).fetchone()
+    if not cat:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Categoria não encontrada.")
+
+    # Verifica se já existe outra categoria com esse mesmo nome
+    existe = cur.execute(
+        "SELECT id FROM categorias WHERE LOWER(nome) = LOWER(?) AND id != ?",
+        (nome_limpo, cat_id),
+    ).fetchone()
+    if existe:
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"Já existe outra categoria chamada '{nome_limpo}'.")
+
+    nome_antigo = cat["nome"]
+    cur.execute(
+        "UPDATE categorias SET nome = ?, tipo = ?, macro_categoria = ? WHERE id = ?",
+        (nome_limpo, payload.tipo, macro_limpa, cat_id),
+    )
+
+    # Se o nome ou tipo mudou, atualiza lançamentos históricos
+    if nome_antigo != nome_limpo or cat["tipo"] != payload.tipo:
+        cur.execute(
+            "UPDATE lancamentos SET categoria = ?, tipo = ? WHERE categoria = ?",
+            (nome_limpo, payload.tipo, nome_antigo),
+        )
+
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "id": cat_id, "nome": nome_limpo, "tipo": payload.tipo, "macro_categoria": macro_limpa}
+
+
+@app.delete("/api/categorias/{cat_id}")
+def excluir_categoria(cat_id: int, forcar: bool = False):
+    """
+    Exclui uma categoria.
+    Caso existam lançamentos vinculados, exige parâmetro de confirmação explícita (forcar=true).
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cat = cur.execute("SELECT * FROM categorias WHERE id = ?", (cat_id,)).fetchone()
+    if not cat:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Categoria não encontrada.")
+
+    qtd_lanc = cur.execute("SELECT COUNT(*) FROM lancamentos WHERE categoria = ?", (cat["nome"],)).fetchone()[0]
+    if qtd_lanc > 0 and not forcar:
+        conn.close()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Não é possível excluir: existem {qtd_lanc} lançamento(s) vinculados a esta categoria. Confirme para forçar a exclusão ou reatribua os lançamentos antes.",
+        )
+
+    cur.execute("DELETE FROM categorias WHERE id = ?", (cat_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": cat_id, "nome": cat["nome"]}
 
 
 @app.get("/api/lancamentos")

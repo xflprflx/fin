@@ -32,6 +32,7 @@
         <nav class="flex space-x-1 overflow-x-auto">
             <button onclick="switchTab('dashboard')" id="tab-dashboard" class="px-4 py-2 text-sm tab-active transition">📊 Dashboard</button>
             <button onclick="switchTab('lancamentos')" id="tab-lancamentos" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📝 Lançamentos</button>
+            <button onclick="switchTab('categorias')" id="tab-categorias" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🏷️ Categorias</button>
             <button onclick="switchTab('resumo')" id="tab-resumo" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📥 Receitas & Despesas</button>
             <button onclick="switchTab('orcamento')" id="tab-orcamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📋 Orçamento vs Real</button>
             <button onclick="switchTab('planejamento')" id="tab-planejamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🎯 Metas, Dívidas & Reserva</button>
@@ -144,7 +145,10 @@
                         </select>
                     </div>
                     <div class="lg:col-span-2">
-                        <label class="block text-xs text-slate-400 mb-1">Categoria (Filtrada por Tipo) *</label>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-xs text-slate-400">Categoria (Filtrada por Tipo) *</label>
+                            <button type="button" onclick="abrirModalNovaCategoriaRapida()" class="text-[11px] text-sky-400 hover:text-sky-300 font-medium hover:underline">+ Nova Categoria</button>
+                        </div>
                         <select id="inpCategoria" required class="w-full rounded px-3 py-1.5 text-sm"></select>
                     </div>
                     <div>
@@ -236,7 +240,119 @@
         </section>
 
         <!-- ==========================================
-             ABA 3: RECEITAS E DESPESAS MENSAIS (MATRIZ)
+             ABA 3: CADASTRO E GESTÃO DE CATEGORIAS
+             ========================================== -->
+        <section id="view-categorias" class="hidden space-y-6">
+            <!-- Indicadores Rápidos -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <span class="text-xs uppercase text-slate-400 font-semibold">Total de Categorias</span>
+                    <div id="cat-kpi-total" class="text-2xl font-bold text-sky-400 mt-1">0</div>
+                    <span class="text-xs text-slate-500">Cadastradas no sistema</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <span class="text-xs uppercase text-slate-400 font-semibold">Categorias de Despesas</span>
+                    <div id="cat-kpi-despesas" class="text-2xl font-bold text-rose-400 mt-1">0</div>
+                    <span class="text-xs text-slate-500">Saídas e contas</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <span class="text-xs uppercase text-slate-400 font-semibold">Categorias de Receitas</span>
+                    <div id="cat-kpi-receitas" class="text-2xl font-bold text-emerald-400 mt-1">0</div>
+                    <span class="text-xs text-slate-500">Entradas e fontes de renda</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <span class="text-xs uppercase text-slate-400 font-semibold">Macro-Categorias</span>
+                    <div id="cat-kpi-macros" class="text-2xl font-bold text-amber-400 mt-1">0</div>
+                    <span class="text-xs text-slate-500">Grupos orçamentários</span>
+                </div>
+            </div>
+
+            <!-- Formulário de Cadastro de Categoria -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+                    <div>
+                        <h2 class="text-sm font-semibold text-sky-400 uppercase tracking-wider">➕ Cadastrar Nova Categoria</h2>
+                        <p class="text-xs text-slate-400">Adicione novas categorias para receitas ou despesas com validação Poka-Yoke.</p>
+                    </div>
+                    <span class="text-xs bg-slate-800/80 text-slate-300 px-3 py-1 rounded-full border border-slate-700">🔒 Duplicatas prevenidas</span>
+                </div>
+                <form id="formNovaCategoria" onsubmit="cadastrarCategoria(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 items-end">
+                    <div class="lg:col-span-3">
+                        <label class="block text-xs text-slate-400 mb-1">Nome da Categoria *</label>
+                        <input type="text" id="inpCatNome" required placeholder="Ex: Combustível, Supermercado, Freelance..." class="w-full rounded px-3 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
+                        <select id="inpCatTipo" onchange="atualizarMacrosNovoForm()" class="w-full rounded px-3 py-1.5 text-sm font-semibold">
+                            <option value="Despesa">🔻 Despesa</option>
+                            <option value="Receita">🔺 Receita</option>
+                        </select>
+                    </div>
+                    <div class="lg:col-span-2">
+                        <label class="block text-xs text-slate-400 mb-1">Macro-Categoria *</label>
+                        <div class="flex gap-1.5">
+                            <select id="inpCatMacro" class="w-full rounded px-3 py-1.5 text-sm"></select>
+                            <input type="text" id="inpCatMacroCustom" placeholder="Ou digite nova..." class="hidden w-full rounded px-3 py-1.5 text-sm">
+                            <button type="button" id="btnToggleMacroCustom" onclick="toggleMacroCustom()" title="Digitar nova macro-categoria personalizada" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-xs text-slate-300 border border-slate-700">✏️</button>
+                        </div>
+                    </div>
+                    <div class="flex justify-end">
+                        <button type="submit" class="w-full bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-4 py-1.5 rounded-lg text-sm transition shadow flex items-center justify-center gap-1.5">
+                            <span>💾</span>
+                            <span>Cadastrar</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Filtros e Barra de Ações da Tabela de Categorias -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+                <div class="flex flex-wrap items-center gap-3">
+                    <div>
+                        <label class="text-xs text-slate-400 mr-1">Tipo:</label>
+                        <select id="filtroCatTipo" onchange="filtrarCategorias()" class="rounded px-2.5 py-1 text-sm font-semibold">
+                            <option value="">Todos</option>
+                            <option value="Despesa">🔻 Despesas</option>
+                            <option value="Receita">🔺 Receitas</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs text-slate-400 mr-1">Macro-Categoria:</label>
+                        <select id="filtroCatMacro" onchange="filtrarCategorias()" class="rounded px-2.5 py-1 text-sm">
+                            <option value="">Todas</option>
+                        </select>
+                    </div>
+                    <div>
+                        <input type="text" id="filtroCatBusca" oninput="filtrarCategorias()" placeholder="🔍 Buscar por nome da categoria..." class="rounded px-3 py-1 text-sm w-72">
+                    </div>
+                </div>
+
+                <div class="text-xs text-slate-400">
+                    Exibindo <span id="cat-count-exibindo" class="font-bold text-white">0</span> de <span id="cat-count-total-filtro" class="font-bold text-white">0</span> categorias
+                </div>
+            </div>
+
+            <!-- Tabela de Categorias -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div class="overflow-x-auto max-h-[560px]">
+                    <table class="w-full text-left border-collapse table-compact">
+                        <thead class="bg-slate-800 text-slate-300 sticky top-0 z-10">
+                            <tr>
+                                <th class="w-32">Tipo</th>
+                                <th>Nome da Categoria</th>
+                                <th>Macro-Categoria</th>
+                                <th class="text-center w-36">Lançamentos</th>
+                                <th class="text-center w-28">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbody-categorias" class="divide-y divide-slate-800"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==========================================
+             ABA 4: RECEITAS E DESPESAS MENSAIS (MATRIZ)
              ========================================== -->
         <section id="view-resumo" class="hidden space-y-6">
             <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
@@ -417,6 +533,92 @@
 
     </main>
 
+    <!-- Modal de Edição de Categoria -->
+    <div id="modalEditarCategoria" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>✏️</span> Editar Categoria
+                </h3>
+                <button type="button" onclick="fecharModalEditarCategoria()" class="text-slate-400 hover:text-white text-lg">✕</button>
+            </div>
+            <form id="formEditarCategoria" onsubmit="salvarEdicaoCategoria(event)" class="space-y-4">
+                <input type="hidden" id="editCatId">
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Nome da Categoria *</label>
+                    <input type="text" id="editCatNome" required class="w-full rounded px-3 py-2 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
+                    <select id="editCatTipo" onchange="atualizarMacrosEdicao()" class="w-full rounded px-3 py-2 text-sm font-semibold">
+                        <option value="Despesa">🔻 Despesa</option>
+                        <option value="Receita">🔺 Receita</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Macro-Categoria *</label>
+                    <div class="flex gap-1.5">
+                        <select id="editCatMacro" class="w-full rounded px-3 py-2 text-sm"></select>
+                        <input type="text" id="editCatMacroCustom" placeholder="Ou digite nova..." class="hidden w-full rounded px-3 py-2 text-sm">
+                        <button type="button" id="btnToggleMacroEditCustom" onclick="toggleMacroEditCustom()" title="Digitar nova macro" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-xs text-slate-300 border border-slate-700">✏️</button>
+                    </div>
+                </div>
+                <div class="bg-slate-800/50 border border-slate-700/60 rounded-lg p-3 text-xs text-slate-300">
+                    ℹ️ <strong>Sincronização Poka-Yoke:</strong> Se você alterar o nome desta categoria, todos os lançamentos históricos associados a ela serão atualizados automaticamente.
+                </div>
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="fecharModalEditarCategoria()" class="px-4 py-2 rounded text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition">
+                        Cancelar
+                    </button>
+                    <button type="submit" class="px-5 py-2 rounded text-sm font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 transition">
+                        💾 Salvar Alterações
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de Criação Rápida de Categoria (A partir de Lançamentos) -->
+    <div id="modalNovaCategoriaRapida" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>🏷️</span> Nova Categoria Rápida
+                </h3>
+                <button type="button" onclick="fecharModalNovaCategoriaRapida()" class="text-slate-400 hover:text-white text-lg">✕</button>
+            </div>
+            <form id="formNovaCategoriaRapida" onsubmit="salvarNovaCategoriaRapida(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Nome da Categoria *</label>
+                    <input type="text" id="rapidaCatNome" required placeholder="Ex: Farmácia, Bônus, Pet shop..." class="w-full rounded px-3 py-2 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
+                    <select id="rapidaCatTipo" onchange="atualizarMacrosRapidaForm()" class="w-full rounded px-3 py-2 text-sm font-semibold">
+                        <option value="Despesa">🔻 Despesa</option>
+                        <option value="Receita">🔺 Receita</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">Macro-Categoria *</label>
+                    <div class="flex gap-1.5">
+                        <select id="rapidaCatMacro" class="w-full rounded px-3 py-2 text-sm"></select>
+                        <input type="text" id="rapidaCatMacroCustom" placeholder="Ou digite nova..." class="hidden w-full rounded px-3 py-2 text-sm">
+                        <button type="button" id="btnToggleMacroRapidaCustom" onclick="toggleMacroRapidaCustom()" title="Digitar nova macro" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-xs text-slate-300 border border-slate-700">✏️</button>
+                    </div>
+                </div>
+                <div class="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                    <button type="button" onclick="fecharModalNovaCategoriaRapida()" class="px-4 py-2 rounded text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition">
+                        Cancelar
+                    </button>
+                    <button type="submit" class="px-5 py-2 rounded text-sm font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 transition">
+                        ➕ Cadastrar e Selecionar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         let categoriasCache = [];
         let dashboardCache = null;
@@ -424,51 +626,415 @@
         let chartEvolucaoInstance = null;
         let chartCategoriasInstance = null;
 
+        const MACROS_PADRAO = {
+            Despesa: [
+                "Moradia", "Alimentação", "Transporte", "Saúde", "Educação",
+                "Lazer", "Vestuário", "Pessoal", "Financeiro", "Poupança/Investimentos", "Outros"
+            ],
+            Receita: [
+                "Renda Principal", "Renda Extra", "Investimentos", "Benefícios", "Outras Receitas", "Outros"
+            ]
+        };
+
         const fmtBRL = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
         const fmtNum = (v) => new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v || 0);
 
         // Alternância de Abas
         function switchTab(tab) {
-            ['dashboard', 'lancamentos', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
-                document.getElementById('view-' + t).classList.add('hidden');
+            ['dashboard', 'lancamentos', 'categorias', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
+                const el = document.getElementById('view-' + t);
+                if (el) el.classList.add('hidden');
                 const btn = document.getElementById('tab-' + t);
-                btn.classList.remove('tab-active');
-                btn.classList.add('text-slate-400');
+                if (btn) {
+                    btn.classList.remove('tab-active');
+                    btn.classList.add('text-slate-400');
+                }
             });
-            document.getElementById('view-' + tab).classList.remove('hidden');
+            const activeEl = document.getElementById('view-' + tab);
+            if (activeEl) activeEl.classList.remove('hidden');
             const activeBtn = document.getElementById('tab-' + tab);
-            activeBtn.classList.add('tab-active');
-            activeBtn.classList.remove('text-slate-400');
+            if (activeBtn) {
+                activeBtn.classList.add('tab-active');
+                activeBtn.classList.remove('text-slate-400');
+            }
         }
 
         async function initApp() {
             document.getElementById('inpData').value = new Date().toISOString().split('T')[0];
-            const resCat = await fetch('/api/categorias');
-            categoriasCache = await resCat.json();
-            atualizarDropdownCategorias();
+            atualizarMacrosNovoForm();
             await reloadAll();
-        }
-
-        function atualizarDropdownCategorias() {
-            const tipo = document.getElementById('inpTipo').value;
-            const sel = document.getElementById('inpCategoria');
-            sel.innerHTML = '';
-            categoriasCache.filter(c => c.tipo === tipo).forEach(c => {
-                const opt = document.createElement('option');
-                opt.value = c.nome;
-                opt.textContent = c.nome;
-                sel.appendChild(opt);
-            });
         }
 
         async function reloadAll() {
             await Promise.all([
+                carregarCategorias(),
                 carregarDashboard(),
                 carregarLancamentos(),
                 carregarOrcamento(),
                 carregarPlanejamento()
             ]);
         }
+
+        // ==========================================
+        // GESTÃO DE CATEGORIAS
+        // ==========================================
+        async function carregarCategorias() {
+            const res = await fetch('/api/categorias');
+            categoriasCache = await res.json();
+            atualizarDropdownCategorias();
+            atualizarKpisCategorias();
+            atualizarFiltroMacroCategorias();
+            filtrarCategorias();
+        }
+
+        function popularSelectMacros(selectElem, tipo, selecionada = "") {
+            selectElem.innerHTML = '';
+            const setMacros = new Set(MACROS_PADRAO[tipo] || []);
+            categoriasCache.filter(c => c.tipo === tipo && c.macro_categoria).forEach(c => setMacros.add(c.macro_categoria));
+
+            Array.from(setMacros).sort().forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                if (m === selecionada) opt.selected = true;
+                selectElem.appendChild(opt);
+            });
+        }
+
+        function atualizarMacrosNovoForm() {
+            const tipo = document.getElementById('inpCatTipo').value;
+            const sel = document.getElementById('inpCatMacro');
+            popularSelectMacros(sel, tipo);
+        }
+
+        function toggleMacroCustom() {
+            const sel = document.getElementById('inpCatMacro');
+            const inp = document.getElementById('inpCatMacroCustom');
+            const btn = document.getElementById('btnToggleMacroCustom');
+            if (inp.classList.contains('hidden')) {
+                inp.classList.remove('hidden');
+                sel.classList.add('hidden');
+                inp.value = sel.value;
+                inp.focus();
+                btn.textContent = '📋';
+                btn.title = 'Escolher da lista';
+            } else {
+                inp.classList.add('hidden');
+                sel.classList.remove('hidden');
+                btn.textContent = '✏️';
+                btn.title = 'Digitar nova macro-categoria';
+            }
+        }
+
+        function atualizarDropdownCategorias() {
+            const tipo = document.getElementById('inpTipo').value;
+            const sel = document.getElementById('inpCategoria');
+            const atual = sel.value;
+            sel.innerHTML = '';
+            const filtradas = categoriasCache.filter(c => c.tipo === tipo);
+            filtradas.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.nome;
+                opt.textContent = c.nome;
+                if (c.nome === atual) opt.selected = true;
+                sel.appendChild(opt);
+            });
+        }
+
+        function atualizarKpisCategorias() {
+            const total = categoriasCache.length;
+            const desp = categoriasCache.filter(c => c.tipo === 'Despesa').length;
+            const rec = categoriasCache.filter(c => c.tipo === 'Receita').length;
+            const macros = new Set(categoriasCache.map(c => c.macro_categoria)).size;
+
+            document.getElementById('cat-kpi-total').textContent = total;
+            document.getElementById('cat-kpi-despesas').textContent = desp;
+            document.getElementById('cat-kpi-receitas').textContent = rec;
+            document.getElementById('cat-kpi-macros').textContent = macros;
+        }
+
+        function atualizarFiltroMacroCategorias() {
+            const sel = document.getElementById('filtroCatMacro');
+            const atual = sel.value;
+            sel.innerHTML = '<option value="">Todas</option>';
+            const setMacros = new Set(categoriasCache.map(c => c.macro_categoria));
+            Array.from(setMacros).sort().forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                if (m === atual) opt.selected = true;
+                sel.appendChild(opt);
+            });
+        }
+
+        function filtrarCategorias() {
+            const tipo = document.getElementById('filtroCatTipo').value;
+            const macro = document.getElementById('filtroCatMacro').value;
+            const busca = document.getElementById('filtroCatBusca').value.toLowerCase().trim();
+
+            const filtradas = categoriasCache.filter(c => {
+                if (tipo && c.tipo !== tipo) return false;
+                if (macro && c.macro_categoria !== macro) return false;
+                if (busca && !c.nome.toLowerCase().includes(busca) && !c.macro_categoria.toLowerCase().includes(busca)) return false;
+                return true;
+            });
+
+            document.getElementById('cat-count-exibindo').textContent = filtradas.length;
+            document.getElementById('cat-count-total-filtro').textContent = categoriasCache.length;
+
+            const tbody = document.getElementById('tbody-categorias');
+            if (filtradas.length === 0) {
+                tbody.innerHTML = `<tr>
+                    <td colspan="5" class="text-center py-8 text-slate-500">
+                        Nenhuma categoria encontrada com os filtros selecionados.
+                    </td>
+                </tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtradas.map(c => {
+                const isRec = c.tipo === 'Receita';
+                const badgeTipo = isRec
+                    ? '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/20 text-emerald-300">🔺 Receita</span>'
+                    : '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-rose-500/20 text-rose-300">🔻 Despesa</span>';
+
+                const qtdLanc = c.total_lancamentos || 0;
+                const badgeLanc = qtdLanc > 0
+                    ? `<span class="px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-sky-500/20 text-sky-300 cursor-pointer hover:bg-sky-500/30" onclick="verLancamentosCategoria('${c.nome}')" title="Filtrar lançamentos">${qtdLanc} lançamento(s)</span>`
+                    : '<span class="text-xs text-slate-500 font-mono">0 lançamentos</span>';
+
+                return `<tr class="hover:bg-slate-800/50 transition">
+                    <td>${badgeTipo}</td>
+                    <td class="font-medium text-white text-sm">${c.nome}</td>
+                    <td><span class="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded border border-slate-700/80">${c.macro_categoria}</span></td>
+                    <td class="text-center">${badgeLanc}</td>
+                    <td class="text-center">
+                        <div class="flex items-center justify-center gap-2">
+                            <button onclick="abrirModalEditarCategoria(${c.id})" class="text-slate-400 hover:text-sky-400 p-1 rounded hover:bg-slate-800 transition" title="Editar">✏️</button>
+                            <button onclick="confirmarExcluirCategoria(${c.id}, '${c.nome.replace(/'/g, "\\'")}', ${qtdLanc})" class="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800 transition" title="Excluir">🗑️</button>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('');
+        }
+
+        function verLancamentosCategoria(nomeCat) {
+            switchTab('lancamentos');
+            const inputBusca = document.getElementById('filtroBusca');
+            if (inputBusca) {
+                inputBusca.value = nomeCat;
+                carregarLancamentos();
+            }
+        }
+
+        async function cadastrarCategoria(e) {
+            e.preventDefault();
+            const nome = document.getElementById('inpCatNome').value.trim();
+            const tipo = document.getElementById('inpCatTipo').value;
+
+            let macro = document.getElementById('inpCatMacro').value;
+            const inpCustom = document.getElementById('inpCatMacroCustom');
+            if (!inpCustom.classList.contains('hidden') && inpCustom.value.trim()) {
+                macro = inpCustom.value.trim();
+            }
+
+            if (!nome) {
+                alert('Por favor, informe o nome da categoria.');
+                return;
+            }
+
+            const res = await fetch('/api/categorias', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nome, tipo, macro_categoria: macro })
+            });
+
+            if (res.ok) {
+                document.getElementById('inpCatNome').value = '';
+                if (!inpCustom.classList.contains('hidden')) {
+                    toggleMacroCustom();
+                }
+                await reloadAll();
+            } else {
+                const err = await res.json();
+                alert('Atenção: ' + (err.detail || 'Não foi possível cadastrar a categoria.'));
+            }
+        }
+
+        function abrirModalEditarCategoria(id) {
+            const cat = categoriasCache.find(c => c.id === id);
+            if (!cat) return;
+
+            document.getElementById('editCatId').value = cat.id;
+            document.getElementById('editCatNome').value = cat.nome;
+            document.getElementById('editCatTipo').value = cat.tipo;
+
+            const selMacro = document.getElementById('editCatMacro');
+            popularSelectMacros(selMacro, cat.tipo, cat.macro_categoria);
+
+            const inpCustom = document.getElementById('editCatMacroCustom');
+            if (!inpCustom.classList.contains('hidden')) {
+                toggleMacroEditCustom();
+            }
+
+            document.getElementById('modalEditarCategoria').classList.remove('hidden');
+        }
+
+        function fecharModalEditarCategoria() {
+            document.getElementById('modalEditarCategoria').classList.add('hidden');
+        }
+
+        function toggleMacroEditCustom() {
+            const sel = document.getElementById('editCatMacro');
+            const inp = document.getElementById('editCatMacroCustom');
+            const btn = document.getElementById('btnToggleMacroEditCustom');
+            if (inp.classList.contains('hidden')) {
+                inp.classList.remove('hidden');
+                sel.classList.add('hidden');
+                inp.value = sel.value;
+                inp.focus();
+                btn.textContent = '📋';
+            } else {
+                inp.classList.add('hidden');
+                sel.classList.remove('hidden');
+                btn.textContent = '✏️';
+            }
+        }
+
+        function atualizarMacrosEdicao() {
+            const tipo = document.getElementById('editCatTipo').value;
+            const sel = document.getElementById('editCatMacro');
+            popularSelectMacros(sel, tipo);
+        }
+
+        async function salvarEdicaoCategoria(e) {
+            e.preventDefault();
+            const id = parseInt(document.getElementById('editCatId').value);
+            const nome = document.getElementById('editCatNome').value.trim();
+            const tipo = document.getElementById('editCatTipo').value;
+
+            let macro = document.getElementById('editCatMacro').value;
+            const inpCustom = document.getElementById('editCatMacroCustom');
+            if (!inpCustom.classList.contains('hidden') && inpCustom.value.trim()) {
+                macro = inpCustom.value.trim();
+            }
+
+            const res = await fetch(`/api/categorias/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nome, tipo, macro_categoria: macro })
+            });
+
+            if (res.ok) {
+                fecharModalEditarCategoria();
+                await reloadAll();
+            } else {
+                const err = await res.json();
+                alert('Erro ao atualizar: ' + (err.detail || 'Verifique os dados informados.'));
+            }
+        }
+
+        async function confirmarExcluirCategoria(id, nome, qtdLanc) {
+            let msg = `Deseja realmente excluir a categoria "${nome}"?`;
+            let forcar = false;
+
+            if (qtdLanc > 0) {
+                msg = `ATENÇÃO (Poka-Yoke):\nExistem ${qtdLanc} lançamento(s) vinculados à categoria "${nome}".\n\nSe você excluir, os lançamentos continuarão no histórico, mas sem esta categoria cadastrada.\n\nDeseja realmente forçar a exclusão?`;
+                forcar = true;
+            }
+
+            if (!confirm(msg)) return;
+
+            const res = await fetch(`/api/categorias/${id}?forcar=${forcar}`, { method: 'DELETE' });
+            if (res.ok) {
+                await reloadAll();
+            } else {
+                const err = await res.json();
+                alert('Não foi possível excluir: ' + (err.detail || 'Erro desconhecido.'));
+            }
+        }
+
+        function abrirModalNovaCategoriaRapida() {
+            const tipoAtual = document.getElementById('inpTipo').value;
+            document.getElementById('rapidaCatTipo').value = tipoAtual;
+            document.getElementById('rapidaCatNome').value = '';
+            const selMacro = document.getElementById('rapidaCatMacro');
+            popularSelectMacros(selMacro, tipoAtual);
+
+            const inpCustom = document.getElementById('rapidaCatMacroCustom');
+            if (!inpCustom.classList.contains('hidden')) {
+                toggleMacroRapidaCustom();
+            }
+
+            document.getElementById('modalNovaCategoriaRapida').classList.remove('hidden');
+            setTimeout(() => document.getElementById('rapidaCatNome').focus(), 50);
+        }
+
+        function fecharModalNovaCategoriaRapida() {
+            document.getElementById('modalNovaCategoriaRapida').classList.add('hidden');
+        }
+
+        function toggleMacroRapidaCustom() {
+            const sel = document.getElementById('rapidaCatMacro');
+            const inp = document.getElementById('rapidaCatMacroCustom');
+            const btn = document.getElementById('btnToggleMacroRapidaCustom');
+            if (inp.classList.contains('hidden')) {
+                inp.classList.remove('hidden');
+                sel.classList.add('hidden');
+                inp.value = sel.value;
+                inp.focus();
+                btn.textContent = '📋';
+            } else {
+                inp.classList.add('hidden');
+                sel.classList.remove('hidden');
+                btn.textContent = '✏️';
+            }
+        }
+
+        function atualizarMacrosRapidaForm() {
+            const tipo = document.getElementById('rapidaCatTipo').value;
+            const sel = document.getElementById('rapidaCatMacro');
+            popularSelectMacros(sel, tipo);
+        }
+
+        async function salvarNovaCategoriaRapida(e) {
+            e.preventDefault();
+            const nome = document.getElementById('rapidaCatNome').value.trim();
+            const tipo = document.getElementById('rapidaCatTipo').value;
+
+            let macro = document.getElementById('rapidaCatMacro').value;
+            const inpCustom = document.getElementById('rapidaCatMacroCustom');
+            if (!inpCustom.classList.contains('hidden') && inpCustom.value.trim()) {
+                macro = inpCustom.value.trim();
+            }
+
+            if (!nome) {
+                alert('Por favor, informe o nome da categoria.');
+                return;
+            }
+
+            const res = await fetch('/api/categorias', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nome, tipo, macro_categoria: macro })
+            });
+
+            if (res.ok) {
+                fecharModalNovaCategoriaRapida();
+                await reloadAll();
+                const inpCat = document.getElementById('inpCategoria');
+                if (inpCat) {
+                    inpCat.value = nome;
+                }
+            } else {
+                const err = await res.json();
+                alert('Atenção: ' + (err.detail || 'Não foi possível cadastrar a categoria.'));
+            }
+        }
+
+        // ==========================================
+        // DEMAIS MÓDULOS (DASHBOARD, LANÇAMENTOS, ETC)
+        // ==========================================
 
         // 1. Carregar Dashboard e Matriz de Receitas/Despesas
         async function carregarDashboard() {
