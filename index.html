@@ -33,6 +33,7 @@
             <button onclick="switchTab('dashboard')" id="tab-dashboard" class="px-4 py-2 text-sm tab-active transition">📊 Dashboard</button>
             <button onclick="switchTab('lancamentos')" id="tab-lancamentos" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📝 Lançamentos</button>
             <button onclick="switchTab('cartoes')" id="tab-cartoes" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">💳 Cartões & Faturas</button>
+            <button onclick="switchTab('financiamentos')" id="tab-financiamentos" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🏠 Financiamentos</button>
             <button onclick="switchTab('categorias')" id="tab-categorias" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🏷️ Categorias</button>
             <button onclick="switchTab('resumo')" id="tab-resumo" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📥 Receitas & Despesas</button>
             <button onclick="switchTab('orcamento')" id="tab-orcamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📋 Orçamento vs Real</button>
@@ -408,6 +409,113 @@
                         <h3 class="text-xs uppercase text-slate-400 font-semibold mb-2">Por categoria</h3>
                         <div id="faturaPorCategoria" class="space-y-2 text-sm"></div>
                     </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==========================================
+             ABA: FINANCIAMENTOS (SAC / TR)
+             ========================================== -->
+        <section id="view-financiamentos" class="hidden space-y-6">
+            <div id="listaFinanciamentos" class="grid grid-cols-1 xl:grid-cols-2 gap-4"></div>
+
+            <!-- Cadastro / simulação -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+                    <h2 class="text-sm font-semibold text-sky-400 uppercase tracking-wider">➕ Novo Financiamento — SAC / TR (Sistema de Amortização Constante)</h2>
+                    <span class="text-xs text-slate-400">Cada prestação vira uma despesa mensal; TR real pode ser informada depois</span>
+                </div>
+                <form id="formFinanciamento" onsubmit="salvarFinanciamento(event)" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+                    <div class="lg:col-span-2">
+                        <label class="block text-xs text-slate-400 mb-1">Nome / Contrato *</label>
+                        <input type="text" id="finNome" required placeholder="Ex: Apartamento - Caixa" class="w-full rounded px-3 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Valor financiado (R$) *</label>
+                        <input type="number" id="finValor" required min="0.01" step="0.01" placeholder="300000.00" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Juros a.a. (%) *</label>
+                        <input type="number" id="finTaxa" required min="0" max="100" step="0.0001" placeholder="9.00" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Tipo da taxa</label>
+                        <select id="finTipoTaxa" class="w-full rounded px-3 py-1.5 text-sm">
+                            <option value="efetiva">Efetiva (a.a.)</option>
+                            <option value="nominal">Nominal (a.a. ÷ 12)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Prazo (meses) *</label>
+                        <input type="number" id="finPrazo" required min="1" max="600" step="1" placeholder="360" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">1ª prestação em *</label>
+                        <input type="date" id="finData" required class="w-full rounded px-3 py-1.5 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1" title="TR mensal usada nos meses em que a TR real ainda não foi informada">TR mensal projetada (%)</label>
+                        <input type="number" id="finTR" min="-5" max="5" step="0.0001" value="0" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Seguros MIP+DFI (R$/mês)</label>
+                        <input type="number" id="finSeguro" min="0" step="0.01" value="0" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Taxa de adm. (R$/mês)</label>
+                        <input type="number" id="finAdm" min="0" step="0.01" value="0" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Categoria da despesa *</label>
+                        <select id="finCategoria" required class="w-full rounded px-3 py-1.5 text-sm"></select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Forma de pgto</label>
+                        <select id="finFormaPgto" class="w-full rounded px-3 py-1.5 text-sm">
+                            <option value="Boleto">Boleto</option>
+                            <option value="Débito">Débito</option>
+                            <option value="PIX">PIX</option>
+                            <option value="Transferência">Transferência</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1" title="Para financiamentos já em andamento: gera despesas só a partir deste mês">Lançar a partir de</label>
+                        <input type="month" id="finAPartir" class="w-full rounded px-3 py-1.5 text-sm">
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-6 flex flex-wrap justify-end gap-2 pt-1">
+                        <button type="button" onclick="simularFinanciamento()" class="px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 transition">🔍 Simular</button>
+                        <button type="submit" class="bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm transition">💾 Cadastrar e gerar lançamentos</button>
+                    </div>
+                </form>
+                <div id="simulacaoFinanciamento" class="hidden mt-4 space-y-3"></div>
+            </div>
+
+            <!-- Cronograma -->
+            <div id="painelCronograma" class="hidden bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap gap-3 justify-between items-center">
+                    <div>
+                        <h2 id="tituloCronograma" class="text-sm font-semibold text-white">📅 Cronograma</h2>
+                        <p class="text-xs text-slate-400">Digite a TR real do mês na coluna TR para recalcular. Em branco = TR projetada.</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-slate-400">Mostrar:</label>
+                        <select id="cronFiltro" onchange="renderizarCronograma()" class="rounded px-2.5 py-1 text-sm">
+                            <option value="janela">Período selecionado no topo (12 meses)</option>
+                            <option value="todas">Todas as prestações</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="overflow-auto max-h-[560px]">
+                    <table class="w-full text-left border-collapse table-compact">
+                        <thead class="bg-slate-800 text-slate-300 sticky top-0 z-10 text-right">
+                            <tr>
+                                <th class="text-center">Nº</th><th class="text-left">Vencimento</th><th>TR (%)</th>
+                                <th>Saldo inicial</th><th>Correção TR</th><th>Amortização</th><th>Juros</th>
+                                <th>Seg.+Adm.</th><th class="text-white">Prestação</th><th>Saldo devedor</th><th class="text-center">Lançada</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbody-cronograma" class="divide-y divide-slate-800 text-right"></tbody>
+                    </table>
                 </div>
             </div>
         </section>
@@ -884,6 +992,7 @@
 
             renderizarCabecalhosMeses();
             popularSelectsPeriodo();
+            if (typeof renderizarCronograma === 'function') renderizarCronograma();
             if (recarregar) reloadAll();
         }
 
@@ -962,7 +1071,7 @@
 
         // Alternância de Abas
         function switchTab(tab) {
-            ['dashboard', 'lancamentos', 'cartoes', 'categorias', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
+            ['dashboard', 'lancamentos', 'cartoes', 'financiamentos', 'categorias', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
                 const el = document.getElementById('view-' + t);
                 if (el) el.classList.add('hidden');
                 const btn = document.getElementById('tab-' + t);
@@ -990,6 +1099,7 @@
         async function reloadAll() {
             await Promise.all([
                 carregarCartoes(),
+                carregarFinanciamentos(),
                 carregarCategorias(),
                 carregarDashboard(),
                 carregarLancamentos(),
@@ -1006,6 +1116,7 @@
             categoriasCache = await res.json();
             atualizarDropdownCategorias();
             popularCategoriasCompra();
+            popularCategoriasFinanciamento();
             atualizarKpisCategorias();
             atualizarFiltroMacroCategorias();
             filtrarCategorias();
@@ -1512,7 +1623,7 @@
                     <td><span class="px-2 py-0.5 rounded text-xs font-medium ${badgeCls}">${r.tipo}</span></td>
                     <td class="text-slate-200">${r.categoria}</td>
                     <td class="text-white font-medium">${r.descricao}${r.recorrencia_id
-                        ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300" title="Lançamento recorrente">🔁 ${r.parcela_num}/${r.parcela_total}</span>`
+                        ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300" title="${r.financiamento_id ? 'Prestação de financiamento' : 'Lançamento recorrente'}">${r.financiamento_id ? '🏠' : '🔁'} ${r.parcela_num}/${r.parcela_total}</span>`
                         : ''}</td>
                     <td class="text-right font-mono ${valCls}">${fmtBRL(r.valor)}</td>
                     <td class="text-slate-300 text-xs">${r.forma_pgto}${r.cartao_nome ? ` <span class="text-violet-300">· 💳 ${r.cartao_nome}</span>` : ''}</td>
@@ -1977,6 +2088,224 @@
             faturaSel = { cartao_id: payload.cartao_id, ano: a, mes: m };
             await reloadAll();
             document.getElementById('compraDescricao').focus();
+        }
+
+        // ==========================================
+        // FINANCIAMENTOS (SAC / TR)
+        // ==========================================
+        let financiamentosCache = [];
+        let cronogramaAtual = null; // financiamento aberto com cronograma
+        const fmtPct = (v, casas = 4) => `${Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: casas })}%`;
+
+        function popularCategoriasFinanciamento() {
+            const sel = document.getElementById('finCategoria');
+            const antes = sel.value;
+            const desp = categoriasCache.filter(c => c.tipo === 'Despesa');
+            sel.innerHTML = desp.map(c => `<option value="${escHtml(c.nome)}">${escHtml(c.nome)}</option>`).join('');
+            const sugerida = desp.find(c => /financ/i.test(c.nome)) || desp.find(c => c.nome === 'Juros e Empréstimos') || desp[0];
+            sel.value = antes && desp.some(c => c.nome === antes) ? antes : (sugerida?.nome || '');
+        }
+
+        function payloadFinanciamento() {
+            return {
+                nome: document.getElementById('finNome').value,
+                valor_financiado: parseFloat(document.getElementById('finValor').value),
+                taxa_juros_anual: parseFloat(document.getElementById('finTaxa').value),
+                tipo_taxa: document.getElementById('finTipoTaxa').value,
+                prazo_meses: parseInt(document.getElementById('finPrazo').value, 10),
+                data_primeira_parcela: document.getElementById('finData').value,
+                tr_projetada: parseFloat(document.getElementById('finTR').value || 0),
+                seguro_mensal: parseFloat(document.getElementById('finSeguro').value || 0),
+                taxa_adm_mensal: parseFloat(document.getElementById('finAdm').value || 0),
+                categoria: document.getElementById('finCategoria').value,
+                forma_pgto: document.getElementById('finFormaPgto').value,
+                lancar_a_partir_de: document.getElementById('finAPartir').value || null
+            };
+        }
+
+        const msgErro = (err) => typeof err.detail === 'string' ? err.detail
+            : Array.isArray(err.detail) ? err.detail.map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join('\n') : 'verifique os campos.';
+
+        function resumoCardsHtml(r, valorFinanciado) {
+            const card = (lbl, val, cls = 'text-white') => `<div class="bg-slate-800/50 rounded-lg p-3"><span class="text-xs text-slate-400">${lbl}</span><div class="text-base font-bold font-mono ${cls}">${val}</div></div>`;
+            return `<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                ${card('Taxa mensal', fmtPct(r.taxa_mensal_pct))}
+                ${card('1ª prestação', fmtBRL(r.primeira_prestacao), 'text-rose-400')}
+                ${card('Última prestação', fmtBRL(r.ultima_prestacao), 'text-emerald-400')}
+                ${card('Total de juros', fmtBRL(r.total_juros), 'text-amber-300')}
+                ${card('Correção TR (proj.)', fmtBRL(r.total_correcao_tr))}
+                ${card('Seguros + taxas', fmtBRL(r.total_seguros_taxas))}
+                ${card('Total a pagar', fmtBRL(r.total_pago), 'text-sky-300')}
+            </div>`;
+        }
+
+        async function simularFinanciamento() {
+            const form = document.getElementById('formFinanciamento');
+            if (!form.reportValidity()) return;
+            const res = await fetch('/api/financiamentos/simular', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadFinanciamento())
+            });
+            const box = document.getElementById('simulacaoFinanciamento');
+            if (!res.ok) { alert('Erro na simulação: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            const data = await res.json();
+            const linhas = data.cronograma.slice(0, 12).map(l => `<tr>
+                <td class="text-center text-slate-400">${l.n}</td><td class="text-left font-mono text-xs">${fmtData(l.data)}</td>
+                <td>${fmtNum(l.amortizacao)}</td><td>${fmtNum(l.juros)}</td><td>${fmtNum(l.seguro + l.taxa_adm)}</td>
+                <td class="font-semibold text-white">${fmtNum(l.prestacao)}</td><td class="text-slate-400">${fmtNum(l.saldo_devedor)}</td></tr>`).join('');
+            box.innerHTML = `<h3 class="text-xs uppercase text-slate-400 font-semibold">Simulação</h3>
+                ${resumoCardsHtml(data.resumo)}
+                <div class="overflow-x-auto border border-slate-800 rounded-lg">
+                    <table class="w-full border-collapse table-compact text-right">
+                        <thead class="bg-slate-800 text-slate-300"><tr><th class="text-center">Nº</th><th class="text-left">Vencimento</th><th>Amortização</th><th>Juros</th><th>Seg.+Adm.</th><th>Prestação</th><th>Saldo devedor</th></tr></thead>
+                        <tbody class="divide-y divide-slate-800">${linhas}</tbody>
+                    </table>
+                </div>
+                <p class="text-xs text-slate-500">Mostrando as 12 primeiras de ${data.cronograma.length} prestações. Última em ${fmtData(data.resumo.ultima_data)}.</p>`;
+            box.classList.remove('hidden');
+        }
+
+        async function salvarFinanciamento(e) {
+            e.preventDefault();
+            const res = await fetch('/api/financiamentos', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadFinanciamento())
+            });
+            if (!res.ok) { alert('Erro ao cadastrar: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            const out = await res.json();
+            document.getElementById('formFinanciamento').reset();
+            document.getElementById('simulacaoFinanciamento').classList.add('hidden');
+            popularCategoriasFinanciamento();
+            await reloadAll();
+            await abrirCronograma(out.id);
+            const [a1, m1] = out.primeira_competencia.split('-').map(Number);
+            const [a2, m2] = out.ultima_competencia.split('-').map(Number);
+            alert(`${out.lancamentos_gerados} prestações lançadas como despesa, de ${MESES_ABREV[m1 - 1]}/${a1} até ${MESES_ABREV[m2 - 1]}/${a2}.`);
+        }
+
+        async function carregarFinanciamentos() {
+            const res = await fetch('/api/financiamentos');
+            financiamentosCache = await res.json();
+            const el = document.getElementById('listaFinanciamentos');
+            if (!financiamentosCache.length) {
+                el.innerHTML = `<div class="xl:col-span-2 bg-slate-900 border border-dashed border-slate-700 rounded-xl p-6 text-center text-sm text-slate-400">
+                    Nenhum financiamento cadastrado. Preencha o formulário abaixo — use <strong>Simular</strong> para conferir antes de gravar.</div>`;
+            } else {
+                el.innerHTML = financiamentosCache.map(f => {
+                    const r = f.resumo;
+                    const venc = f.prazo_meses - r.parcelas_restantes;
+                    const pctPrazo = (venc / f.prazo_meses) * 100;
+                    const pctQuitado = Math.max(0, Math.min(100, (1 - r.saldo_devedor_hoje / f.valor_financiado) * 100));
+                    const prox = r.proxima_parcela;
+                    return `<div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+                        <div class="flex items-start justify-between gap-2">
+                            <div>
+                                <div class="text-base font-bold text-white">🏠 ${escHtml(f.nome)}</div>
+                                <div class="text-xs text-slate-400">${f.sistema} / ${f.indexador} • ${fmtPct(f.taxa_juros_anual)} a.a. ${f.tipo_taxa} (${fmtPct(r.taxa_mensal_pct)} a.m.) • ${f.prazo_meses} meses • ${fmtBRL(f.valor_financiado)}</div>
+                            </div>
+                            <div class="flex gap-1 shrink-0">
+                                <button onclick="abrirCronograma(${f.id})" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">📅 Cronograma</button>
+                                <button onclick="excluirFinanciamento(${f.id})" class="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-slate-800" title="Excluir">🗑️</button>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            <div class="bg-slate-800/50 rounded-lg p-2.5"><span class="text-[11px] text-slate-400">Saldo devedor hoje</span><div class="font-bold font-mono text-rose-400">${fmtBRL(r.saldo_devedor_hoje)}</div></div>
+                            <div class="bg-slate-800/50 rounded-lg p-2.5"><span class="text-[11px] text-slate-400">Próxima prestação</span><div class="font-bold font-mono text-white">${prox ? fmtBRL(prox.prestacao) : '—'}</div><div class="text-[11px] text-slate-500">${prox ? `nº ${prox.n} • ${fmtData(prox.data)}` : 'quitado'}</div></div>
+                            <div class="bg-slate-800/50 rounded-lg p-2.5"><span class="text-[11px] text-slate-400">Juros totais (proj.)</span><div class="font-bold font-mono text-amber-300">${fmtBRL(r.total_juros)}</div></div>
+                            <div class="bg-slate-800/50 rounded-lg p-2.5"><span class="text-[11px] text-slate-400">Total a pagar (proj.)</span><div class="font-bold font-mono text-sky-300">${fmtBRL(r.total_pago)}</div></div>
+                        </div>
+                        <div class="space-y-1.5">
+                            <div class="flex justify-between text-xs text-slate-400"><span>Prazo: ${venc}/${f.prazo_meses} prestações vencidas</span><span>${pctPrazo.toFixed(1)}%</span></div>
+                            <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden"><div class="h-full bg-sky-500" style="width:${pctPrazo.toFixed(1)}%"></div></div>
+                            <div class="flex justify-between text-xs text-slate-400"><span>Dívida quitada</span><span>${pctQuitado.toFixed(1)}%</span></div>
+                            <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden"><div class="h-full bg-emerald-500" style="width:${pctQuitado.toFixed(1)}%"></div></div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                            <label>TR projetada (% a.m.):</label>
+                            <input type="number" step="0.0001" min="-5" max="5" value="${f.tr_projetada}" onchange="alterarTRProjetada(${f.id}, this.value)" class="w-24 rounded px-2 py-1 text-xs font-mono">
+                            <span class="text-slate-500">• Seg.+Adm. ${fmtBRL(f.seguro_mensal + f.taxa_adm_mensal)}/mês • ${escHtml(f.categoria)}</span>
+                        </div>
+                    </div>`;
+                }).join('');
+            }
+            if (cronogramaAtual) {
+                if (financiamentosCache.some(f => f.id === cronogramaAtual.id)) await abrirCronograma(cronogramaAtual.id, false);
+                else { cronogramaAtual = null; document.getElementById('painelCronograma').classList.add('hidden'); }
+            }
+        }
+
+        async function abrirCronograma(id, rolar = true) {
+            const res = await fetch(`/api/financiamentos/${id}`);
+            if (!res.ok) return;
+            cronogramaAtual = await res.json();
+            document.getElementById('tituloCronograma').textContent = `📅 Cronograma — ${cronogramaAtual.nome} (SAC / TR)`;
+            document.getElementById('painelCronograma').classList.remove('hidden');
+            renderizarCronograma();
+            if (rolar) {
+                switchTab('financiamentos');
+                document.getElementById('painelCronograma').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+        function renderizarCronograma() {
+            if (!cronogramaAtual) return;
+            const filtro = document.getElementById('cronFiltro').value;
+            const ini = periodosAtuais[0].chave, fim = periodosAtuais[11].chave;
+            const d = new Date();
+            const chaveHoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            let linhas = cronogramaAtual.cronograma;
+            if (filtro === 'janela') linhas = linhas.filter(l => l.data.slice(0, 7) >= ini && l.data.slice(0, 7) <= fim);
+            const tbody = document.getElementById('tbody-cronograma');
+            if (!linhas.length) {
+                tbody.innerHTML = `<tr><td colspan="11" class="text-center text-slate-500 py-6">Nenhuma prestação no período ${periodosAtuais[0].label} → ${periodosAtuais[11].label}. Use ◀ ▶ no topo ou mostre todas.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = linhas.map(l => {
+                const atual = l.data.slice(0, 7) === chaveHoje;
+                const passada = l.data.slice(0, 7) < chaveHoje;
+                return `<tr class="${atual ? 'bg-sky-500/10 ring-1 ring-inset ring-sky-500/40' : passada ? 'text-slate-500' : 'text-slate-300'} hover:bg-slate-800/40">
+                    <td class="text-center">${l.n}</td>
+                    <td class="text-left font-mono text-xs">${fmtData(l.data)}</td>
+                    <td><input type="number" step="0.0001" min="-5" max="5" value="${l.tr_real ? l.tr_pct : ''}" placeholder="${l.tr_pct}"
+                        title="${l.tr_real ? 'TR real informada' : 'TR projetada — digite a real para recalcular'}"
+                        onchange="definirTRMes(${l.ano}, ${l.mes}, this.value)"
+                        class="w-20 text-right rounded px-1.5 py-0.5 text-xs font-mono ${l.tr_real ? 'font-bold' : ''}"></td>
+                    <td class="font-mono">${fmtNum(l.saldo_inicial)}</td>
+                    <td class="font-mono">${fmtNum(l.correcao_tr)}</td>
+                    <td class="font-mono">${fmtNum(l.amortizacao)}</td>
+                    <td class="font-mono text-amber-300/90">${fmtNum(l.juros)}</td>
+                    <td class="font-mono">${fmtNum(l.seguro + l.taxa_adm)}</td>
+                    <td class="font-mono font-semibold ${passada ? '' : 'text-white'}">${fmtNum(l.prestacao)}</td>
+                    <td class="font-mono">${fmtNum(l.saldo_devedor)}</td>
+                    <td class="text-center text-xs">${l.lancamento_id ? '✓' : '<span class="text-slate-600">—</span>'}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function definirTRMes(ano, mes, valor) {
+            const tr_pct = valor === '' ? null : parseFloat(valor);
+            const res = await fetch(`/api/financiamentos/${cronogramaAtual.id}/tr`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ano, mes, tr_pct })
+            });
+            if (!res.ok) { alert('Erro ao salvar TR: ' + msgErro(await res.json().catch(() => ({})))); }
+            await reloadAll();
+        }
+
+        async function alterarTRProjetada(id, valor) {
+            const res = await fetch(`/api/financiamentos/${id}/tr-projetada`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tr_pct: parseFloat(valor || 0) })
+            });
+            if (!res.ok) { alert('Erro ao salvar TR projetada: ' + msgErro(await res.json().catch(() => ({})))); }
+            await reloadAll();
+        }
+
+        async function excluirFinanciamento(id) {
+            const f = financiamentosCache.find(x => x.id === id);
+            if (!f || !confirm(`Excluir o financiamento "${f.nome}"?\n\nTodas as prestações lançadas como despesa também serão removidas.`)) return;
+            await fetch(`/api/financiamentos/${id}`, { method: 'DELETE' });
+            if (cronogramaAtual?.id === id) {
+                cronogramaAtual = null;
+                document.getElementById('painelCronograma').classList.add('hidden');
+            }
+            await reloadAll();
         }
 
         // 3. Orçamento vs Realizado

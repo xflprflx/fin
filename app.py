@@ -87,6 +87,34 @@ def init_db():
             PRIMARY KEY (cartao_id, ano, mes)
         );
 
+        CREATE TABLE IF NOT EXISTS financiamentos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            sistema TEXT NOT NULL DEFAULT 'SAC',
+            indexador TEXT NOT NULL DEFAULT 'TR',
+            valor_financiado REAL NOT NULL,
+            taxa_juros_anual REAL NOT NULL,
+            tipo_taxa TEXT NOT NULL DEFAULT 'efetiva',
+            prazo_meses INTEGER NOT NULL,
+            data_primeira_parcela TEXT NOT NULL,
+            tr_projetada REAL NOT NULL DEFAULT 0.0,
+            seguro_mensal REAL NOT NULL DEFAULT 0.0,
+            taxa_adm_mensal REAL NOT NULL DEFAULT 0.0,
+            categoria TEXT NOT NULL,
+            forma_pgto TEXT NOT NULL DEFAULT 'Boleto',
+            lancar_a_partir_de TEXT,
+            recorrencia_id TEXT,
+            criado_em TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS financiamento_tr (
+            financiamento_id INTEGER NOT NULL,
+            ano INTEGER NOT NULL,
+            mes INTEGER NOT NULL,
+            tr_pct REAL NOT NULL,
+            PRIMARY KEY (financiamento_id, ano, mes)
+        );
+
         CREATE TABLE IF NOT EXISTS orcamento (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             macro_categoria TEXT NOT NULL,
@@ -139,6 +167,7 @@ def init_db():
         ("parcela_num", "INTEGER"),
         ("parcela_total", "INTEGER"),
         ("cartao_id", "INTEGER"),
+        ("financiamento_id", "INTEGER"),
     ):
         if col not in colunas_lanc:
             cur.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {ddl}")
@@ -297,6 +326,33 @@ class CartaoInput(BaseModel):
     dia_fechamento: int = Field(..., ge=1, le=31)
     dia_vencimento: int = Field(..., ge=1, le=31)
     limite: float = Field(default=0.0, ge=0)
+
+
+class FinanciamentoInput(BaseModel):
+    nome: str = Field(..., min_length=1, description="Ex.: Apartamento - Caixa")
+    valor_financiado: float = Field(..., gt=0)
+    taxa_juros_anual: float = Field(..., ge=0, le=100, description="Taxa de juros anual em %")
+    tipo_taxa: str = Field(default="efetiva", pattern="^(efetiva|nominal)$")
+    prazo_meses: int = Field(..., ge=1, le=600)
+    data_primeira_parcela: str = Field(..., description="YYYY-MM-DD")
+    tr_projetada: float = Field(default=0.0, ge=-5, le=5, description="TR mensal projetada em % (ex.: 0.08)")
+    seguro_mensal: float = Field(default=0.0, ge=0, description="MIP + DFI em R$/mês")
+    taxa_adm_mensal: float = Field(default=0.0, ge=0, description="Taxa de administração em R$/mês")
+    categoria: str = Field(default="Juros e Empréstimos")
+    forma_pgto: str = "Boleto"
+    lancar_a_partir_de: Optional[str] = Field(
+        default=None, description="AAAA-MM: só gera lançamentos a partir deste mês (financiamento já em andamento)"
+    )
+
+
+class TRMensalInput(BaseModel):
+    ano: int
+    mes: int = Field(..., ge=1, le=12)
+    tr_pct: Optional[float] = Field(default=None, ge=-5, le=5, description="TR real do mês em %; null remove")
+
+
+class TRProjetadaInput(BaseModel):
+    tr_pct: float = Field(..., ge=-5, le=5)
 
 
 class PagamentoFaturaInput(BaseModel):
@@ -475,6 +531,133 @@ def obter_cartao(conn, cartao_id: int):
         conn.close()
         raise HTTPException(status_code=404, detail="Cartão não encontrado.")
     return cartao
+
+
+# ==========================================
+# Financiamento: SAC (Sistema de Amortização Constante) com indexador TR
+# ==========================================
+def taxa_mensal(taxa_anual_pct: float, tipo: str) -> float:
+    """Converte a taxa anual em mensal: efetiva -> (1+i)^(1/12)-1 ; nominal -> i/12."""
+    i = taxa_anual_pct / 100
+    return (1 + i) ** (1 / 12) - 1 if tipo == "efetiva" else i / 12
+
+
+def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None) -> List[dict]:
+    """
+    Gera o cronograma SAC corrigido pela TR. A cada mês k (1..n):
+      saldo corrigido = saldo anterior × (1 + TR do mês)
+      amortização     = saldo corrigido ÷ (n − k + 1)     (constante quando TR = 0)
+      juros           = saldo corrigido × taxa mensal
+      prestação       = amortização + juros + seguros + taxa de administração
+      novo saldo      = saldo corrigido − amortização
+    TR real informada para o mês substitui a TR projetada.
+    """
+    tr_reais = tr_reais or {}
+    i_m = taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"])
+    n = int(fin["prazo_meses"])
+    inicio = datetime.strptime(fin["data_primeira_parcela"], "%Y-%m-%d").date()
+    saldo = float(fin["valor_financiado"])
+    seguro = float(fin["seguro_mensal"] or 0)
+    adm = float(fin["taxa_adm_mensal"] or 0)
+    linhas = []
+    for k in range(1, n + 1):
+        d = somar_meses(inicio, k - 1)
+        real = (d.year, d.month) in tr_reais
+        tr = tr_reais[(d.year, d.month)] if real else float(fin["tr_projetada"] or 0)
+        correcao = saldo * tr / 100
+        saldo_corr = saldo + correcao
+        amort = saldo_corr / (n - k + 1)
+        juros = saldo_corr * i_m
+        prestacao = amort + juros + seguro + adm
+        saldo_final = saldo_corr - amort
+        linhas.append({
+            "n": k,
+            "data": d.isoformat(),
+            "ano": d.year,
+            "mes": d.month,
+            "tr_pct": round(tr, 6),
+            "tr_real": real,
+            "saldo_inicial": round(saldo, 2),
+            "correcao_tr": round(correcao, 2),
+            "amortizacao": round(amort, 2),
+            "juros": round(juros, 2),
+            "seguro": round(seguro, 2),
+            "taxa_adm": round(adm, 2),
+            "prestacao": round(prestacao, 2),
+            "saldo_devedor": round(max(saldo_final, 0.0), 2),
+        })
+        saldo = saldo_final
+    return linhas
+
+
+def resumo_financiamento(fin: dict, cronograma: List[dict], hoje: Optional[date] = None) -> dict:
+    hoje = hoje or date.today()
+    pagas = [l for l in cronograma if l["data"] <= hoje.isoformat()]
+    futuras = [l for l in cronograma if l["data"] > hoje.isoformat()]
+    return {
+        "taxa_mensal_pct": round(taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"]) * 100, 6),
+        "primeira_prestacao": cronograma[0]["prestacao"],
+        "ultima_prestacao": cronograma[-1]["prestacao"],
+        "ultima_data": cronograma[-1]["data"],
+        "total_amortizado": round(sum(l["amortizacao"] for l in cronograma), 2),
+        "total_juros": round(sum(l["juros"] for l in cronograma), 2),
+        "total_correcao_tr": round(sum(l["correcao_tr"] for l in cronograma), 2),
+        "total_seguros_taxas": round(sum(l["seguro"] + l["taxa_adm"] for l in cronograma), 2),
+        "total_pago": round(sum(l["prestacao"] for l in cronograma), 2),
+        "parcelas_pagas": len(pagas),
+        "parcelas_restantes": len(futuras),
+        "saldo_devedor_hoje": pagas[-1]["saldo_devedor"] if pagas else round(float(fin["valor_financiado"]), 2),
+        "proxima_parcela": futuras[0] if futuras else None,
+    }
+
+
+def _obs_parcela(l: dict) -> str:
+    return (f"Amort. R$ {l['amortizacao']:.2f} | Juros R$ {l['juros']:.2f} | "
+            f"Seg+Adm R$ {l['seguro'] + l['taxa_adm']:.2f} | TR {l['tr_pct']:.4f}%"
+            + ("" if l["tr_real"] else " (proj.)"))
+
+
+def _validar_financiamento(payload: FinanciamentoInput) -> dict:
+    try:
+        datetime.strptime(payload.data_primeira_parcela, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data da 1ª prestação inválida. Use YYYY-MM-DD.")
+    if payload.lancar_a_partir_de:
+        try:
+            datetime.strptime(payload.lancar_a_partir_de + "-01", "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="'Lançar a partir de' deve estar no formato AAAA-MM.")
+    nome = payload.nome.strip()
+    if not nome:
+        raise HTTPException(status_code=400, detail="Informe um nome para o financiamento.")
+    dados = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    dados["nome"] = nome
+    return dados
+
+
+def _tr_reais(conn, fin_id: int) -> dict:
+    return {(r["ano"], r["mes"]): r["tr_pct"] for r in conn.execute(
+        "SELECT ano, mes, tr_pct FROM financiamento_tr WHERE financiamento_id = ?", (fin_id,)).fetchall()}
+
+
+def _sincronizar_lancamentos_financiamento(conn, fin: dict) -> List[dict]:
+    """Recalcula o cronograma e atualiza valor/observação das prestações já lançadas."""
+    cron = calcular_sac_tr(fin, _tr_reais(conn, fin["id"]))
+    por_n = {l["n"]: l for l in cron}
+    for row in conn.execute("SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ?", (fin["id"],)).fetchall():
+        l = por_n.get(row["parcela_num"])
+        if l:
+            conn.execute("UPDATE lancamentos SET valor = ?, observacao = ? WHERE id = ?",
+                         (l["prestacao"], _obs_parcela(l), row["id"]))
+    return cron
+
+
+def _obter_financiamento(conn, fin_id: int) -> dict:
+    row = conn.execute("SELECT * FROM financiamentos WHERE id = ?", (fin_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Financiamento não encontrado.")
+    return dict(row)
 
 
 # ==========================================
@@ -1078,6 +1261,149 @@ def resumo_faturas(ano: int = 2026, mes_inicio: int = 1):
                        "total": round(sum(f["total"] for f in faturas), 2)})
     totais_mes = [round(sum(l["faturas"][i]["total"] for l in linhas), 2) for i in range(12)]
     return {"periodos": periodos, "linhas": linhas, "totais_mes": totais_mes}
+
+
+# ==========================================
+# Financiamentos (SAC / TR)
+# ==========================================
+@app.post("/api/financiamentos/simular")
+def simular_financiamento(payload: FinanciamentoInput):
+    """Calcula o cronograma SAC/TR sem gravar nada (prévia do formulário)."""
+    fin = _validar_financiamento(payload)
+    cron = calcular_sac_tr(fin)
+    return {"resumo": resumo_financiamento(fin, cron), "cronograma": cron}
+
+
+@app.post("/api/financiamentos")
+def criar_financiamento(payload: FinanciamentoInput):
+    """
+    Cadastra o financiamento e gera uma despesa mensal para cada prestação
+    (a partir de `lancar_a_partir_de`, se informado), vinculadas como uma série.
+    """
+    fin = _validar_financiamento(payload)
+    cron = calcular_sac_tr(fin)
+    a_partir = fin.get("lancar_a_partir_de") or cron[0]["data"][:7]
+    parcelas = [l for l in cron if l["data"][:7] >= a_partir]
+    if not parcelas:
+        raise HTTPException(status_code=400, detail="Nenhuma prestação a lançar a partir do mês informado.")
+
+    recorrencia_id = uuid.uuid4().hex
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO financiamentos (nome, sistema, indexador, valor_financiado, taxa_juros_anual, tipo_taxa,
+                prazo_meses, data_primeira_parcela, tr_projetada, seguro_mensal, taxa_adm_mensal, categoria,
+                forma_pgto, lancar_a_partir_de, recorrencia_id, criado_em)
+            VALUES (?, 'SAC', 'TR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (fin["nome"], fin["valor_financiado"], fin["taxa_juros_anual"], fin["tipo_taxa"], fin["prazo_meses"],
+             fin["data_primeira_parcela"], fin["tr_projetada"], fin["seguro_mensal"], fin["taxa_adm_mensal"],
+             fin["categoria"], fin["forma_pgto"], a_partir, recorrencia_id,
+             datetime.now().isoformat(timespec="seconds")),
+        )
+        fin_id = cur.lastrowid
+        cur.execute(
+            """
+            INSERT INTO recorrencias (id, frequencia, modo, ocorrencias, data_inicio, valor_informado, criado_em)
+            VALUES (?, 'mensal', 'financiamento', ?, ?, ?, ?)
+            """,
+            (recorrencia_id, fin["prazo_meses"], fin["data_primeira_parcela"], fin["valor_financiado"],
+             datetime.now().isoformat(timespec="seconds")),
+        )
+        for l in parcelas:
+            cur.execute(
+                """
+                INSERT INTO lancamentos (data, mes, ano, tipo, categoria, descricao, valor, forma_pgto, observacao,
+                    competencia, recorrencia_id, parcela_num, parcela_total, financiamento_id)
+                VALUES (?, ?, ?, 'Despesa', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (l["data"], l["mes"], l["ano"], fin["categoria"], f"Financiamento {fin['nome']}", l["prestacao"],
+                 fin["forma_pgto"], _obs_parcela(l), f"{l['mes']:02d}/{l['ano']}", recorrencia_id, l["n"],
+                 fin["prazo_meses"], fin_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "ok", "id": fin_id, "lancamentos_gerados": len(parcelas),
+            "primeira_competencia": parcelas[0]["data"][:7], "ultima_competencia": parcelas[-1]["data"][:7]}
+
+
+@app.get("/api/financiamentos")
+def listar_financiamentos():
+    conn = get_db_connection()
+    resultado = []
+    for row in conn.execute("SELECT * FROM financiamentos ORDER BY id").fetchall():
+        fin = dict(row)
+        cron = calcular_sac_tr(fin, _tr_reais(conn, fin["id"]))
+        resultado.append({**fin, "resumo": resumo_financiamento(fin, cron)})
+    conn.close()
+    return resultado
+
+
+@app.get("/api/financiamentos/{fin_id}")
+def obter_financiamento(fin_id: int):
+    """Contrato + cronograma completo (com TR real/projetada) + indicação de quais prestações estão lançadas."""
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    cron = calcular_sac_tr(fin, _tr_reais(conn, fin_id))
+    lancadas = {r["parcela_num"]: r["id"] for r in conn.execute(
+        "SELECT id, parcela_num FROM lancamentos WHERE financiamento_id = ?", (fin_id,)).fetchall()}
+    conn.close()
+    for l in cron:
+        l["lancamento_id"] = lancadas.get(l["n"])
+    return {**fin, "resumo": resumo_financiamento(fin, cron), "cronograma": cron}
+
+
+@app.put("/api/financiamentos/{fin_id}/tr")
+def definir_tr_mensal(fin_id: int, payload: TRMensalInput):
+    """Registra (ou remove, com tr_pct = null) a TR real de um mês e recalcula as prestações."""
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    if payload.tr_pct is None:
+        conn.execute("DELETE FROM financiamento_tr WHERE financiamento_id = ? AND ano = ? AND mes = ?",
+                     (fin_id, payload.ano, payload.mes))
+    else:
+        conn.execute(
+            """
+            INSERT INTO financiamento_tr (financiamento_id, ano, mes, tr_pct) VALUES (?, ?, ?, ?)
+            ON CONFLICT(financiamento_id, ano, mes) DO UPDATE SET tr_pct = excluded.tr_pct
+            """,
+            (fin_id, payload.ano, payload.mes, payload.tr_pct),
+        )
+    _sincronizar_lancamentos_financiamento(conn, fin)
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.put("/api/financiamentos/{fin_id}/tr-projetada")
+def definir_tr_projetada(fin_id: int, payload: TRProjetadaInput):
+    """Altera a TR projetada (usada nos meses sem TR real) e recalcula as prestações."""
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    conn.execute("UPDATE financiamentos SET tr_projetada = ? WHERE id = ?", (payload.tr_pct, fin_id))
+    fin["tr_projetada"] = payload.tr_pct
+    _sincronizar_lancamentos_financiamento(conn, fin)
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.delete("/api/financiamentos/{fin_id}")
+def excluir_financiamento(fin_id: int):
+    """Exclui o financiamento, as TRs registradas e todas as prestações lançadas."""
+    conn = get_db_connection()
+    fin = _obter_financiamento(conn, fin_id)
+    removidos = conn.execute("DELETE FROM lancamentos WHERE financiamento_id = ?", (fin_id,)).rowcount
+    conn.execute("DELETE FROM financiamento_tr WHERE financiamento_id = ?", (fin_id,))
+    if fin["recorrencia_id"]:
+        conn.execute("DELETE FROM recorrencias WHERE id = ?", (fin["recorrencia_id"],))
+    conn.execute("DELETE FROM financiamentos WHERE id = ?", (fin_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": fin_id, "lancamentos_removidos": removidos}
 
 
 @app.get("/api/dashboard")
