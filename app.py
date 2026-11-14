@@ -1102,6 +1102,12 @@ def criar_lancamento(payload: LancamentoInput):
         base = fatura_da_compra(cartao, dt)
         periodos_contabeis = [mover_mes(base[0], base[1], i) for i in range(len(datas))]
         datas = [dt] * len(datas)
+    elif rec is not None and FREQUENCIAS[rec.frequencia][0] == "meses":
+        # Cobrança recorrente mensal/bimestral/... no cartão: uma ocorrência por fatura no intervalo,
+        # ancorada na fatura da 1ª cobrança (evita pular/duplicar fatura em dias 29–31)
+        base = fatura_da_compra(cartao, dt)
+        passo = FREQUENCIAS[rec.frequencia][1]
+        periodos_contabeis = [mover_mes(base[0], base[1], i * passo) for i in range(len(datas))]
     else:
         periodos_contabeis = [fatura_da_compra(cartao, d) for d in datas]
 
@@ -1507,7 +1513,8 @@ def obter_fatura(cartao_id: int, ano: int, mes: int):
     conn = get_db_connection()
     cartao = obter_cartao(conn, cartao_id)
     itens = [dict(r) for r in conn.execute(
-        "SELECT * FROM lancamentos WHERE cartao_id = ? AND ano = ? AND mes = ? ORDER BY data ASC, id ASC",
+        """SELECT l.*, r.modo AS modo_serie FROM lancamentos l LEFT JOIN recorrencias r ON r.id = l.recorrencia_id
+           WHERE l.cartao_id = ? AND l.ano = ? AND l.mes = ? ORDER BY l.data ASC, l.id ASC""",
         (cartao_id, ano, mes),
     ).fetchall()]
     total = sum(i["valor"] for i in itens)

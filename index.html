@@ -370,10 +370,10 @@
                 </div>
 
                 <!-- Lançar compra rapidamente neste cartão -->
-                <form id="formCompraCartao" onsubmit="lancarCompraCartao(event)" class="grid grid-cols-2 lg:grid-cols-7 gap-3 items-end border border-slate-800 rounded-lg p-3">
+                <form id="formCompraCartao" onsubmit="lancarCompraCartao(event)" class="grid grid-cols-2 lg:grid-cols-8 gap-3 items-end border border-slate-800 rounded-lg p-3">
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Data da compra *</label>
-                        <input type="date" id="compraData" required class="w-full rounded px-3 py-1.5 text-sm">
+                        <input type="date" id="compraData" required oninput="atualizarPreviaCompraCartao()" class="w-full rounded px-3 py-1.5 text-sm">
                     </div>
                     <div class="lg:col-span-2">
                         <label class="block text-xs text-slate-400 mb-1">Descrição *</label>
@@ -384,23 +384,39 @@
                         <select id="compraCategoria" required class="w-full rounded px-3 py-1.5 text-sm"></select>
                     </div>
                     <div>
-                        <label class="block text-xs text-slate-400 mb-1">Valor total (R$) *</label>
-                        <input type="number" id="compraValor" required min="0.01" step="0.01" placeholder="0.00" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                        <label class="block text-xs text-slate-400 mb-1">Tipo</label>
+                        <select id="compraModo" onchange="document.getElementById('compraParcelas').value = this.value === 'repetir' ? 12 : 2; atualizarPreviaCompraCartao()" class="w-full rounded px-2 py-1.5 text-sm">
+                            <option value="avista">À vista</option>
+                            <option value="parcelar">Parcelada</option>
+                            <option value="repetir">Recorrente (assinatura)</option>
+                        </select>
                     </div>
                     <div>
-                        <label class="block text-xs text-slate-400 mb-1">Parcelas</label>
-                        <input type="number" id="compraParcelas" min="1" max="120" step="1" value="1" class="w-full rounded px-3 py-1.5 text-sm font-mono" title="1 = à vista">
+                        <label id="lblCompraValor" class="block text-xs text-slate-400 mb-1">Valor (R$) *</label>
+                        <input type="number" id="compraValor" required min="0.01" step="0.01" placeholder="0.00" oninput="atualizarPreviaCompraCartao()" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div id="boxCompraQtd" class="hidden">
+                        <label id="lblCompraQtd" class="block text-xs text-slate-400 mb-1">Parcelas *</label>
+                        <div class="flex gap-1">
+                            <select id="compraFrequencia" onchange="atualizarPreviaCompraCartao()" class="hidden rounded px-1 py-1.5 text-xs w-24">
+                                <option value="mensal">Mensal</option><option value="bimestral">Bimestral</option><option value="trimestral">Trimestral</option>
+                                <option value="semestral">Semestral</option><option value="anual">Anual</option>
+                                <option value="semanal">Semanal</option><option value="quinzenal">Quinzenal</option>
+                            </select>
+                            <input type="number" id="compraParcelas" min="2" max="120" step="1" value="2" oninput="atualizarPreviaCompraCartao()" class="w-full rounded px-2 py-1.5 text-sm font-mono">
+                        </div>
                     </div>
                     <div class="col-span-2 lg:col-span-1 flex justify-end">
                         <button type="submit" class="w-full bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition">➕ Lançar compra</button>
                     </div>
+                    <div id="previaCompraCartao" class="col-span-2 lg:col-span-8 text-xs text-slate-400 -mt-1"></div>
                 </form>
 
                 <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
                     <div class="lg:col-span-3 overflow-x-auto border border-slate-800 rounded-lg">
                         <table class="w-full text-left border-collapse table-compact">
                             <thead class="bg-slate-800 text-slate-300">
-                                <tr><th>Data compra</th><th>Descrição</th><th>Categoria</th><th class="text-center">Parcela</th><th class="text-right">Valor (R$)</th><th class="text-center">Ação</th></tr>
+                                <tr><th>Data compra</th><th>Descrição</th><th>Categoria</th><th class="text-center">Parcela / Recorr.</th><th class="text-right">Valor (R$)</th><th class="text-center">Ação</th></tr>
                             </thead>
                             <tbody id="tbody-fatura-itens" class="divide-y divide-slate-800"></tbody>
                         </table>
@@ -1871,7 +1887,7 @@
             resumo.innerHTML = `Serão gerados <strong class="text-white">${qtd}</strong> lançamentos ${FREQ_LABEL[freq]} de `
                 + `<strong class="text-white">${fmtBRL(porOcorrencia)}</strong> `
                 + `(total <strong class="text-white">${fmtBRL(total)}</strong>).`
-                + (cartaoSelecionadoNoForm() && modo === 'parcelar' ? ' Uma parcela em cada fatura seguinte.' : '');
+                + (cartaoSelecionadoNoForm() ? (modo === 'parcelar' ? ' Uma parcela em cada fatura seguinte.' : ' Cada cobrança entra na fatura do seu mês.') : '');
         }
 
         // ==========================================
@@ -2232,6 +2248,7 @@
                 carregarResumoFaturas();
             }
             const { cartao_id, ano, mes } = faturaSel;
+            atualizarPreviaCompraCartao();
             const res = await fetch(`/api/cartoes/${cartao_id}/faturas/${ano}/${mes}`);
             if (!res.ok) return;
             const f = await res.json();
@@ -2256,7 +2273,9 @@
                     <td class="font-mono text-xs text-slate-300">${fmtData(i.data)}</td>
                     <td class="text-white">${escHtml(i.descricao)}</td>
                     <td class="text-slate-300 text-xs">${escHtml(i.categoria)}</td>
-                    <td class="text-center">${i.parcela_total ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300">${i.parcela_num}/${i.parcela_total}</span>` : '<span class="text-slate-600 text-xs">à vista</span>'}</td>
+                    <td class="text-center">${!i.parcela_total ? '<span class="text-slate-600 text-xs">à vista</span>'
+                        : i.modo_serie === 'parcelar' ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300" title="Parcela">${i.parcela_num}/${i.parcela_total}</span>`
+                        : `<span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-sky-500/20 text-sky-300" title="Cobrança recorrente">🔁 ${i.parcela_num}/${i.parcela_total}</span>`}</td>
                     <td class="text-right font-mono text-rose-400 font-semibold">${fmtBRL(i.valor)}${diffPrevistoHtml(i)}</td>
                     <td class="text-center whitespace-nowrap"><button onclick="abrirEdicaoLancamento(${i.id})" class="text-slate-500 hover:text-sky-400 px-1.5 py-0.5 text-xs" title="Editar">✏️</button><button onclick="removerLancamento(${i.id})" class="text-slate-500 hover:text-rose-400 px-1.5 py-0.5 text-xs" title="Excluir">🗑️</button></td>
                 </tr>`).join('')
@@ -2286,11 +2305,51 @@
             await carregarCartoes();
         }
 
-        // Lançamento rápido de compra direto no cartão selecionado
+        // Lançamento rápido: à vista, parcelada (divide o total) ou recorrente (cobrança fixa em cada fatura)
+        const FREQ_PLURAL = { semanal: 'semanais', quinzenal: 'quinzenais', mensal: 'mensais', bimestral: 'bimestrais',
+                              trimestral: 'trimestrais', semestral: 'semestrais', anual: 'anuais' };
+        let _previaCompraSeq = 0;
+        async function atualizarPreviaCompraCartao() {
+            const modo = document.getElementById('compraModo').value;
+            const freqSel = document.getElementById('compraFrequencia');
+            const inpQtd = document.getElementById('compraParcelas');
+            document.getElementById('boxCompraQtd').classList.toggle('hidden', modo === 'avista');
+            freqSel.classList.toggle('hidden', modo !== 'repetir');
+            inpQtd.required = modo !== 'avista';
+            document.getElementById('lblCompraQtd').textContent = modo === 'repetir' ? 'Frequência / nº de cobranças *' : 'Parcelas *';
+            document.getElementById('lblCompraValor').textContent =
+                modo === 'parcelar' ? 'Valor total (R$) *' : modo === 'repetir' ? 'Valor por cobrança (R$) *' : 'Valor (R$) *';
+
+            const previa = document.getElementById('previaCompraCartao');
+            const data = document.getElementById('compraData').value;
+            const valor = parseFloat(document.getElementById('compraValor').value) || 0;
+            const qtd = parseInt(inpQtd.value, 10) || 0;
+            if (!faturaSel || !data) { previa.textContent = ''; return; }
+            const seq = ++_previaCompraSeq;
+            const res = await fetch(`/api/cartoes/${faturaSel.cartao_id}/fatura-da-compra?data=${data}`);
+            if (seq !== _previaCompraSeq || !res.ok) return;
+            const f = await res.json();
+            const passo = { mensal: 1, bimestral: 2, trimestral: 3, semestral: 6, anual: 12 };
+            const faturaN = (n) => { const t = f.ano * 12 + (f.mes - 1) + n; return `${MESES_ABREV[t % 12]}/${String(Math.floor(t / 12)).slice(2)}`; };
+            if (modo === 'avista' || qtd < 2) {
+                previa.innerHTML = `Entra na fatura <strong class="text-white">${f.label}</strong> (fecha ${fmtData(f.fechamento)}, vence ${fmtData(f.vencimento)}).`;
+            } else if (modo === 'parcelar') {
+                previa.innerHTML = `${qtd} parcelas de <strong class="text-white">${fmtBRL(valor / qtd)}</strong>, uma por fatura: `
+                    + `<strong class="text-white">${f.label} → ${faturaN(qtd - 1)}</strong>.`;
+            } else {
+                const freq = freqSel.value;
+                const ate = passo[freq] ? ` até <strong class="text-white">${faturaN((qtd - 1) * passo[freq])}</strong>` : '';
+                previa.innerHTML = `${qtd} cobranças ${FREQ_PLURAL[freq]} de <strong class="text-white">${fmtBRL(valor)}</strong> `
+                    + `(total ${fmtBRL(valor * qtd)}), a partir da fatura <strong class="text-white">${f.label}</strong>${ate}. `
+                    + `<span class="text-slate-500">Para mudar o valor depois (reajuste), edite com "este e os próximos".</span>`;
+            }
+        }
+
         async function lancarCompraCartao(e) {
             e.preventDefault();
-            const parcelas = parseInt(document.getElementById('compraParcelas').value, 10) || 1;
-            if (parcelas < 1 || parcelas > 120) { alert('Parcelas deve ficar entre 1 e 120.'); return; }
+            const modo = document.getElementById('compraModo').value;
+            const parcelas = modo === 'avista' ? 1 : (parseInt(document.getElementById('compraParcelas').value, 10) || 0);
+            if (modo !== 'avista' && (parcelas < 2 || parcelas > 120)) { alert('Informe entre 2 e 120 parcelas/cobranças.'); return; }
             const payload = {
                 data: document.getElementById('compraData').value,
                 tipo: 'Despesa',
@@ -2301,7 +2360,10 @@
                 observacao: '',
                 cartao_id: faturaSel.cartao_id
             };
-            if (parcelas > 1) payload.recorrencia = { frequencia: 'mensal', ocorrencias: parcelas, modo: 'parcelar' };
+            if (modo === 'parcelar') payload.recorrencia = { frequencia: 'mensal', ocorrencias: parcelas, modo: 'parcelar' };
+            if (modo === 'repetir') payload.recorrencia = {
+                frequencia: document.getElementById('compraFrequencia').value, ocorrencias: parcelas, modo: 'repetir'
+            };
             const res = await fetch('/api/lancamentos', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
             });
@@ -2313,7 +2375,9 @@
             const out = await res.json();
             document.getElementById('compraDescricao').value = '';
             document.getElementById('compraValor').value = '';
-            document.getElementById('compraParcelas').value = 1;
+            document.getElementById('compraModo').value = 'avista';
+            document.getElementById('compraParcelas').value = 2;
+            atualizarPreviaCompraCartao();
             // Mostra a fatura onde a compra (1ª parcela) caiu
             const [a, m] = out.primeira_competencia.split('-').map(Number);
             faturaSel = { cartao_id: payload.cartao_id, ano: a, mes: m };
