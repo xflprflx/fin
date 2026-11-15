@@ -998,54 +998,81 @@ def listar_lancamentos(
     ano: int = 2026,
     mes_inicio: int = 1,
     periodo: Optional[str] = None,
+    ate: Optional[str] = None,
     mes: Optional[int] = None,
     tipo: Optional[str] = None,
     busca: Optional[str] = None,
     recorrencia: Optional[str] = None,
     cartao_id: Optional[int] = None,
+    com_cartao: bool = False,
+    categoria: Optional[str] = None,
+    macro: Optional[str] = None,
 ):
     """
-    Lista os lançamentos com suporte a filtros combinados de período, tipo, termo de busca
-    e recorrência (recorrencia=unico | recorrente).
+    Lista os lançamentos com filtros combinados.
 
-    Período: por padrão, a janela de 12 meses iniciada em mes_inicio/ano.
-    `periodo=AAAA-MM` restringe a um único mês; `mes` (legado) filtra um mês do `ano`.
+    Período (um dos três):
+      - padrão: janela de 12 meses iniciada em mes_inicio/ano;
+      - `periodo=AAAA-MM`: um único mês;
+      - `ate=AAAA-MM`: do início da janela até esse mês (ex.: saldo acumulado);
+      - `mes` (legado): um mês do `ano`.
+    Outros filtros: tipo, busca (texto), recorrencia (unico | recorrente), cartao_id,
+    com_cartao (só compras em cartão), categoria (nome exato) e macro (macro-categoria).
     """
-    conn = get_db_connection()
-    if periodo:
+    def ano_mes(txt: str, nome: str) -> tuple:
         try:
-            p_ano, p_mes = (int(x) for x in periodo.split("-"))
+            a, m = (int(x) for x in txt.split("-"))
+            if not 1 <= m <= 12:
+                raise ValueError
+            return a, m
         except ValueError:
-            conn.close()
-            raise HTTPException(status_code=400, detail="periodo deve estar no formato AAAA-MM.")
-        query = "SELECT * FROM lancamentos WHERE ano = ? AND mes = ?"
-        params = [p_ano, p_mes]
+            raise HTTPException(status_code=400, detail=f"{nome} deve estar no formato AAAA-MM.")
+
+    if periodo:
+        p_ano, p_mes = ano_mes(periodo, "periodo")
+        where, params = "l.ano = ? AND l.mes = ?", [p_ano, p_mes]
+    elif ate:
+        a_ano, a_mes = ano_mes(ate, "ate")
+        ini = janela_meses(ano, mes_inicio)[0]
+        where = "(l.ano * 100 + l.mes) BETWEEN ? AND ?"
+        params = [chave_periodo(ini["ano"], ini["mes"]), chave_periodo(a_ano, a_mes)]
     elif mes:
-        query = "SELECT * FROM lancamentos WHERE ano = ? AND mes = ?"
-        params = [ano, mes]
+        where, params = "l.ano = ? AND l.mes = ?", [ano, mes]
     else:
-        sql_j, params = filtro_janela(janela_meses(ano, mes_inicio))
-        query = f"SELECT * FROM lancamentos WHERE {sql_j}"
-    query = query.replace(
-        "SELECT * FROM lancamentos WHERE",
-        "SELECT l.*, k.nome AS cartao_nome FROM lancamentos l LEFT JOIN cartoes k ON k.id = l.cartao_id WHERE",
-    )
+        where, params = filtro_janela(janela_meses(ano, mes_inicio), "l.")
+
+    query = f"""
+        SELECT l.*, k.nome AS cartao_nome, COALESCE(c.macro_categoria, 'Outros') AS macro_categoria
+        FROM lancamentos l
+        LEFT JOIN cartoes k ON k.id = l.cartao_id
+        LEFT JOIN categorias c ON c.nome = l.categoria
+        WHERE {where}
+    """
     if tipo and tipo in ("Receita", "Despesa"):
-        query += " AND tipo = ?"
+        query += " AND l.tipo = ?"
         params.append(tipo)
     if busca:
-        query += " AND (descricao LIKE ? OR categoria LIKE ? OR observacao LIKE ? OR k.nome LIKE ?)"
+        query += " AND (l.descricao LIKE ? OR l.categoria LIKE ? OR l.observacao LIKE ? OR k.nome LIKE ?)"
         termo = f"%{busca}%"
         params.extend([termo, termo, termo, termo])
     if recorrencia == "unico":
-        query += " AND recorrencia_id IS NULL"
+        query += " AND l.recorrencia_id IS NULL"
     elif recorrencia == "recorrente":
-        query += " AND recorrencia_id IS NOT NULL"
+        query += " AND l.recorrencia_id IS NOT NULL"
     if cartao_id:
         query += " AND l.cartao_id = ?"
         params.append(cartao_id)
+    if com_cartao:
+        query += " AND l.cartao_id IS NOT NULL"
+    if categoria is not None:
+        query += " AND l.categoria = ?"
+        params.append(categoria)
+    if macro is not None:
+        query += " AND COALESCE(c.macro_categoria, 'Outros') = ?"
+        params.append(macro)
 
     query += " ORDER BY l.data DESC, l.id DESC"
+    conn = get_db_connection()
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]

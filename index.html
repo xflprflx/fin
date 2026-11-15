@@ -944,8 +944,33 @@
         </div>
     </div>
 
+    <!-- Modal de Resumo de Lançamentos (aberto ao clicar em valores das matrizes) -->
+    <div id="modalResumoLanc" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick="if (event.target === this) fecharResumoLancamentos()">
+        <div class="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-4xl shadow-2xl max-h-[90vh] flex flex-col">
+            <div class="flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-slate-800">
+                <div>
+                    <h3 id="resumoLancTitulo" class="text-base font-semibold text-white"></h3>
+                    <p id="resumoLancSub" class="text-xs text-slate-400"></p>
+                </div>
+                <button type="button" onclick="fecharResumoLancamentos()" class="text-slate-400 hover:text-white text-lg">✕</button>
+            </div>
+            <div class="px-5 py-3 space-y-3 overflow-y-auto">
+                <div id="resumoLancKpis" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
+                <div id="resumoLancCategorias" class="space-y-1.5"></div>
+                <div class="border border-slate-800 rounded-lg overflow-hidden">
+                    <table class="w-full text-left border-collapse table-compact">
+                        <thead class="bg-slate-800 text-slate-300 sticky top-0">
+                            <tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Pgto</th><th class="text-right">Valor</th><th class="text-center">Ação</th></tr>
+                        </thead>
+                        <tbody id="resumoLancItens" class="divide-y divide-slate-800"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal de Edição de Lançamento -->
-    <div id="modalEditarLancamento" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div id="modalEditarLancamento" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
         <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-y-auto">
             <div class="flex items-center justify-between mb-2">
                 <h3 class="text-base font-semibold text-white">✏️ Editar lançamento</h3>
@@ -1016,7 +1041,7 @@
     </div>
 
     <!-- Modal de Exclusão de Lançamento Recorrente -->
-    <div id="modalExcluirRecorrente" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div id="modalExcluirRecorrente" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
         <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
             <div class="flex items-center justify-between mb-3">
                 <h3 class="text-base font-semibold text-white">🔁 Excluir lançamento recorrente</h3>
@@ -1222,6 +1247,11 @@
         }
 
         async function reloadAll() {
+            await recarregarTudo();
+            await atualizarResumoAberto();
+        }
+
+        async function recarregarTudo() {
             await Promise.all([
                 carregarCartoes(),
                 carregarFinanciamentos(),
@@ -1622,19 +1652,36 @@
                 { label: 'Orçado x Real (R$)', vals: s.orcado_vs_real, tot: Object.values(s.orcado_vs_real).reduce((a,b)=>a+b,0), cls: 'text-slate-400' }
             ];
 
+            limparCelulas('dash');
+            // Filtro de lançamentos por linha: quais lançamentos compõem o indicador
+            const filtroLinha = {
+                'Receita Total': { tipo: 'Receita' },
+                'Despesas Totais': { tipo: 'Despesa' },
+                'Orçado x Real (R$)': { tipo: 'Despesa' }
+            };
             tbody.innerHTML = linhas.map(row => {
                 let cols = '';
+                const fBase = filtroLinha[row.label] || {};
                 for (let m = 1; m <= 12; m++) {
                     const v = row.vals[m] || 0;
                     const formatted = row.isPct ? `${v.toFixed(1)}%` : fmtNum(v);
                     const colorOverride = (!row.isPct && row.label === 'Saldo do Mês') ? (v < 0 ? 'text-rose-400' : 'text-emerald-400') : '';
-                    cols += `<td class="${colorOverride}">${formatted}</td>`;
+                    const p = periodosAtuais[m - 1];
+                    const acumulado = row.label === 'Saldo Acumulado';
+                    const cel = registrarCelula('dash', {
+                        titulo: `${row.label} — ${acumulado ? `${periodosAtuais[0].label} até ${p.label}` : `${MESES_NOME[p.mes - 1]}/${p.ano}`}`,
+                        filtros: { ...fBase, ...(acumulado ? { ate: p.chave } : { periodo: p.chave }) }
+                    });
+                    cols += `<td class="${colorOverride} ${CLS_CELULA}" onclick="abrirCelula(${cel})">${formatted}</td>`;
                 }
                 const totFormatted = row.isPct ? `${row.tot.toFixed(1)}%` : fmtBRL(row.tot);
+                const celTot = registrarCelula('dash', {
+                    titulo: `${row.label} — ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`, filtros: { ...fBase }
+                });
                 return `<tr class="${row.cls}">
                     <td class="text-left font-medium text-white">${row.label}</td>
                     ${cols}
-                    <td class="bg-slate-800/60 font-bold">${totFormatted}</td>
+                    <td class="bg-slate-800/60 font-bold ${CLS_CELULA}" onclick="abrirCelula(${celTot})">${totFormatted}</td>
                 </tr>`;
             }).join('');
 
@@ -1696,19 +1743,29 @@
 
         function renderizarMatrizResumo(lista) {
             const tbody = document.getElementById('tbody-resumo-matriz');
+            limparCelulas('resumo');
             tbody.innerHTML = lista.map(item => {
                 let cols = '';
                 for (let m = 1; m <= 12; m++) {
                     const v = item.meses[m] || 0;
-                    cols += `<td class="${v > 0 ? 'text-slate-200' : 'text-slate-600'}">${fmtNum(v)}</td>`;
+                    const p = periodosAtuais[m - 1];
+                    const cel = registrarCelula('resumo', {
+                        titulo: `${item.categoria} — ${MESES_NOME[p.mes - 1]}/${p.ano}`,
+                        filtros: { categoria: item.categoria, periodo: p.chave }
+                    });
+                    cols += `<td class="${v > 0 ? 'text-slate-200' : 'text-slate-600'} ${CLS_CELULA}" onclick="abrirCelula(${cel})">${fmtNum(v)}</td>`;
                 }
+                const celTotCat = registrarCelula('resumo', {
+                    titulo: `${item.categoria} — ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`,
+                    filtros: { categoria: item.categoria }
+                });
                 const badge = item.tipo === 'Receita'
                     ? '<span class="text-emerald-400 mr-1">▸</span>'
                     : '<span class="text-rose-400 mr-1">▸</span>';
                 return `<tr class="hover:bg-slate-800/40">
                     <td class="text-left font-medium text-slate-200">${badge}${item.categoria}</td>
                     ${cols}
-                    <td class="bg-slate-800/50 font-semibold text-white">${fmtBRL(item.total_ano)}</td>
+                    <td class="bg-slate-800/50 font-semibold text-white ${CLS_CELULA}" onclick="abrirCelula(${celTotCat})">${fmtBRL(item.total_ano)}</td>
                 </tr>`;
             }).join('');
         }
@@ -1824,7 +1881,12 @@
         }
 
         async function removerLancamento(id) {
-            const lanc = lancamentosCache.find(l => l.id === id) || (faturaAtualCache?.itens || []).find(l => l.id === id);
+            let lanc = lancamentosCache.find(l => l.id === id) || (faturaAtualCache?.itens || []).find(l => l.id === id)
+                || resumoItensCache.find(l => l.id === id);
+            if (!lanc) {
+                const r = await fetch(`/api/lancamentos/${id}`);
+                if (r.ok) lanc = await r.json();
+            }
             if (lanc && lanc.amortizacao_id) {
                 if (!confirm('Este lançamento é uma amortização extraordinária.\n\nExcluí-lo desfaz a amortização e recalcula as prestações do financiamento. Continuar?')) return;
                 await fetch(`/api/lancamentos/${id}`, { method: 'DELETE' });
@@ -1889,6 +1951,110 @@
                 + `(total <strong class="text-white">${fmtBRL(total)}</strong>).`
                 + (cartaoSelecionadoNoForm() ? (modo === 'parcelar' ? ' Uma parcela em cada fatura seguinte.' : ' Cada cobrança entra na fatura do seu mês.') : '');
         }
+
+        // ==========================================
+        // RESUMO DE LANÇAMENTOS AO CLICAR NAS MATRIZES
+        // ==========================================
+        const CLS_CELULA = 'cursor-pointer hover:bg-sky-500/10 hover:underline decoration-dotted underline-offset-2';
+        const celulasResumo = new Map(); // id -> { grupo, titulo, subtitulo, filtros }
+        let _proxCelula = 1;
+        let resumoAtual = null;
+        let resumoItensCache = [];
+
+        function registrarCelula(grupo, def) {
+            const id = _proxCelula++;
+            celulasResumo.set(id, { grupo, ...def });
+            return id;
+        }
+
+        function limparCelulas(grupo) {
+            for (const [id, c] of celulasResumo) if (c.grupo === grupo) celulasResumo.delete(id);
+        }
+
+        function abrirCelula(id) {
+            const c = celulasResumo.get(id);
+            if (c) abrirResumoLancamentos(c);
+        }
+
+        async function abrirResumoLancamentos(def) {
+            resumoAtual = def;
+            const { ano, mes_inicio } = getPeriodoInicio();
+            const params = new URLSearchParams({ ano, mes_inicio });
+            Object.entries(def.filtros || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') params.append(k, v); });
+            const res = await fetch(`/api/lancamentos?${params.toString()}`);
+            const itens = res.ok ? await res.json() : [];
+            resumoItensCache = itens;
+
+            document.getElementById('resumoLancTitulo').textContent = def.titulo;
+            const f = def.filtros || {};
+            const escopo = f.periodo ? '' : f.ate ? '' : `Período ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`;
+            document.getElementById('resumoLancSub').textContent = [def.subtitulo, escopo, `${itens.length} lançamento(s)`].filter(Boolean).join(' • ');
+
+            const rec = itens.filter(i => i.tipo === 'Receita').reduce((a, i) => a + i.valor, 0);
+            const desp = itens.filter(i => i.tipo === 'Despesa').reduce((a, i) => a + i.valor, 0);
+            const ajustados = itens.filter(i => i.valor_previsto != null);
+            const difPrev = ajustados.reduce((a, i) => a + (i.valor - i.valor_previsto), 0);
+            const kpi = (lbl, val, cls) => `<div class="bg-slate-800/50 rounded-lg p-2.5"><span class="text-[11px] text-slate-400">${lbl}</span><div class="font-bold font-mono ${cls}">${val}</div></div>`;
+            document.getElementById('resumoLancKpis').innerHTML =
+                kpi('Receitas', fmtBRL(rec), 'text-emerald-400') +
+                kpi('Despesas', fmtBRL(desp), 'text-rose-400') +
+                kpi('Saldo', fmtBRL(rec - desp), rec - desp < 0 ? 'text-rose-400' : 'text-sky-300') +
+                kpi('Ajustes x previsto', ajustados.length ? `${difPrev > 0 ? '+' : ''}${fmtBRL(difPrev)}` : '—', 'text-amber-300');
+
+            // Quebra por categoria (barras proporcionais dentro de cada tipo)
+            const porCat = {};
+            itens.forEach(i => {
+                const k = `${i.tipo}|${i.categoria}`;
+                porCat[k] = porCat[k] || { tipo: i.tipo, categoria: i.categoria, total: 0, qtd: 0 };
+                porCat[k].total += i.valor; porCat[k].qtd++;
+            });
+            const cats = Object.values(porCat).sort((a, b) => b.total - a.total);
+            document.getElementById('resumoLancCategorias').innerHTML = cats.length > 1 ? cats.map(c => {
+                const base = c.tipo === 'Receita' ? rec : desp;
+                const pct = base > 0 ? c.total / base * 100 : 0;
+                return `<div class="text-xs"><div class="flex justify-between"><span class="text-slate-300">${c.tipo === 'Receita' ? '🔺' : '🔻'} ${escHtml(c.categoria)} <span class="text-slate-500">(${c.qtd})</span></span>
+                    <span class="font-mono text-slate-200">${fmtBRL(c.total)} <span class="text-slate-500">${pct.toFixed(1)}%</span></span></div>
+                    <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden mt-0.5"><div class="h-full ${c.tipo === 'Receita' ? 'bg-emerald-500/70' : 'bg-rose-500/70'}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+            }).join('') : '';
+
+            document.getElementById('resumoLancItens').innerHTML = itens.length ? itens.map(i => {
+                const isRec = i.tipo === 'Receita';
+                const selo = i.financiamento_id && !i.amortizacao_id ? `🏠 ${i.parcela_num}/${i.parcela_total}`
+                    : i.amortizacao_id ? '💰 extra' : i.recorrencia_id ? `🔁 ${i.parcela_num}/${i.parcela_total}` : '';
+                const competenciaDif = `${i.data.slice(0, 7)}` !== `${i.ano}-${String(i.mes).padStart(2, '0')}`;
+                return `<tr class="hover:bg-slate-800/50">
+                    <td class="font-mono text-xs text-slate-300 whitespace-nowrap">${fmtData(i.data)}${competenciaDif ? `<div class="text-[10px] text-slate-500">compet. ${i.competencia}</div>` : ''}</td>
+                    <td class="text-white">${escHtml(i.descricao)}${selo ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300">${selo}</span>` : ''}</td>
+                    <td class="text-xs text-slate-300">${escHtml(i.categoria)}<div class="text-[10px] text-slate-500">${escHtml(i.macro_categoria || '')}</div></td>
+                    <td class="text-xs text-slate-400">${escHtml(i.forma_pgto || '')}${i.cartao_nome ? ` · 💳 ${escHtml(i.cartao_nome)}` : ''}</td>
+                    <td class="text-right font-mono font-semibold ${isRec ? 'text-emerald-400' : 'text-rose-400'} whitespace-nowrap">${fmtBRL(i.valor)}${diffPrevistoHtml(i)}</td>
+                    <td class="text-center whitespace-nowrap">
+                        <button onclick="abrirEdicaoLancamento(${i.id})" class="text-slate-500 hover:text-sky-400 px-1.5 text-xs" title="Editar">✏️</button>
+                        <button onclick="removerLancamento(${i.id})" class="text-slate-500 hover:text-rose-400 px-1.5 text-xs" title="Excluir">🗑️</button>
+                    </td></tr>`;
+            }).join('') : '<tr><td colspan="6" class="text-center text-slate-500 py-6">Nenhum lançamento compõe este valor.</td></tr>';
+
+            document.getElementById('modalResumoLanc').classList.remove('hidden');
+        }
+
+        function fecharResumoLancamentos() {
+            resumoAtual = null;
+            resumoItensCache = [];
+            document.getElementById('modalResumoLanc').classList.add('hidden');
+        }
+
+        // Mantém o resumo aberto atualizado depois de editar/excluir
+        async function atualizarResumoAberto() {
+            if (resumoAtual && !document.getElementById('modalResumoLanc').classList.contains('hidden')) {
+                await abrirResumoLancamentos(resumoAtual);
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (!document.getElementById('modalEditarLancamento').classList.contains('hidden')) fecharModalEditarLancamento();
+            else if (!document.getElementById('modalResumoLanc').classList.contains('hidden')) fecharResumoLancamentos();
+        });
 
         // ==========================================
         // EDIÇÃO DE LANÇAMENTOS (previsto x real)
@@ -2201,6 +2367,7 @@
             if (!cartoesCache.length) { tbody.innerHTML = ''; return; }
             const res = await fetch(`/api/faturas?${qsPeriodo()}`);
             const data = await res.json();
+            limparCelulas('fat');
             const linhas = data.linhas.map(l => {
                 const cols = l.faturas.map(f => {
                     const ativa = faturaSel && faturaSel.cartao_id === l.cartao_id && faturaSel.ano === f.ano && faturaSel.mes === f.mes;
@@ -2209,10 +2376,19 @@
                         title="${escHtml(l.cartao)} • ${f.label} • ${STATUS_FATURA[f.status].txt} • vence ${fmtData(f.vencimento)}"
                         onclick="abrirFatura(${l.cartao_id}, ${f.ano}, ${f.mes})">${fmtNum(f.total)}${f.status === 'paga' && f.total > 0 ? ' ✓' : ''}</td>`;
                 }).join('');
-                return `<tr class="hover:bg-slate-800/30"><td class="text-left font-medium text-white">💳 ${escHtml(l.cartao)}</td>${cols}<td class="bg-slate-800/50 font-semibold text-white">${fmtBRL(l.total)}</td></tr>`;
+                const celTot = registrarCelula('fat', {
+                    titulo: `Compras no ${l.cartao} — faturas ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`,
+                    filtros: { cartao_id: l.cartao_id }
+                });
+                return `<tr class="hover:bg-slate-800/30"><td class="text-left font-medium text-white">💳 ${escHtml(l.cartao)}</td>${cols}<td class="bg-slate-800/50 font-semibold text-white ${CLS_CELULA}" onclick="abrirCelula(${celTot})">${fmtBRL(l.total)}</td></tr>`;
             });
             if (data.linhas.length > 1) {
-                linhas.push(`<tr class="bg-slate-800/40 font-semibold"><td class="text-left text-slate-300">Total cartões</td>${data.totais_mes.map(v => `<td class="text-rose-300">${fmtNum(v)}</td>`).join('')}<td class="bg-slate-800 text-white">${fmtBRL(data.totais_mes.reduce((a, b) => a + b, 0))}</td></tr>`);
+                const celTotal = registrarCelula('fat', { titulo: `Todas as faturas — ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`, filtros: { com_cartao: true } });
+                linhas.push(`<tr class="bg-slate-800/40 font-semibold"><td class="text-left text-slate-300">Total cartões</td>${data.totais_mes.map((v, i) => {
+                    const p = periodosAtuais[i];
+                    const cel = registrarCelula('fat', { titulo: `Todas as faturas — ${MESES_NOME[p.mes - 1]}/${p.ano}`, filtros: { com_cartao: true, periodo: p.chave } });
+                    return `<td class="text-rose-300 ${CLS_CELULA}" onclick="abrirCelula(${cel})">${fmtNum(v)}</td>`;
+                }).join('')}<td class="bg-slate-800 text-white ${CLS_CELULA}" onclick="abrirCelula(${celTotal})">${fmtBRL(data.totais_mes.reduce((a, b) => a + b, 0))}</td></tr>`);
             }
             tbody.innerHTML = linhas.join('');
         }
@@ -2799,8 +2975,20 @@
             const mes = parseInt(document.getElementById('orcMesSelect').value); // posição na janela (1..12)
             const tbody = document.getElementById('tbody-orcamento');
 
+            limparCelulas('orc');
+            const pSel = periodosAtuais[mes - 1];
             tbody.innerHTML = orcamentoCache.map(row => {
                 const orcMes = row.orcado[mes] || 0;
+                const celMes = registrarCelula('orc', {
+                    titulo: `Despesas de ${row.macro_categoria} — ${MESES_NOME[pSel.mes - 1]}/${pSel.ano}`,
+                    subtitulo: `Orçado no mês: ${fmtBRL(orcMes)}`,
+                    filtros: { tipo: 'Despesa', macro: row.macro_categoria, periodo: pSel.chave }
+                });
+                const celTot = registrarCelula('orc', {
+                    titulo: `Despesas de ${row.macro_categoria} — ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`,
+                    subtitulo: `Orçado no período: ${fmtBRL(row.total_orcado)}`,
+                    filtros: { tipo: 'Despesa', macro: row.macro_categoria }
+                });
                 const realMes = row.realizado[mes] || 0;
                 const difMes = row.diferenca[mes] || 0;
                 const estourado = difMes > 0 && orcMes > 0;
@@ -2812,11 +3000,11 @@
                             onchange="salvarValorOrcado('${row.macro_categoria}', ${mes}, this.value)"
                             class="w-28 text-right rounded px-2 py-1 text-xs font-mono">
                     </td>
-                    <td class="font-mono text-slate-200">${fmtBRL(realMes)}</td>
-                    <td class="font-mono font-semibold ${estourado ? 'text-rose-400' : 'text-emerald-400'}">${fmtBRL(difMes)}</td>
+                    <td class="font-mono text-slate-200 ${CLS_CELULA}" onclick="abrirCelula(${celMes})">${fmtBRL(realMes)}</td>
+                    <td class="font-mono font-semibold ${estourado ? 'text-rose-400' : 'text-emerald-400'} ${CLS_CELULA}" onclick="abrirCelula(${celMes})">${fmtBRL(difMes)}</td>
                     <td class="border-l border-slate-800 font-mono text-slate-400">${fmtBRL(row.total_orcado)}</td>
-                    <td class="font-mono text-slate-200">${fmtBRL(row.total_realizado)}</td>
-                    <td class="font-mono font-semibold ${row.variacao_anual > 0 ? 'text-rose-400' : 'text-emerald-400'}">${fmtBRL(row.variacao_anual)}</td>
+                    <td class="font-mono text-slate-200 ${CLS_CELULA}" onclick="abrirCelula(${celTot})">${fmtBRL(row.total_realizado)}</td>
+                    <td class="font-mono font-semibold ${row.variacao_anual > 0 ? 'text-rose-400' : 'text-emerald-400'} ${CLS_CELULA}" onclick="abrirCelula(${celTot})">${fmtBRL(row.variacao_anual)}</td>
                 </tr>`;
             }).join('');
         }
