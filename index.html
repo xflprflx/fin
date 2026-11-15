@@ -31,6 +31,7 @@
 
         <nav class="flex space-x-1 overflow-x-auto">
             <button onclick="switchTab('dashboard')" id="tab-dashboard" class="px-4 py-2 text-sm tab-active transition">📊 Dashboard</button>
+            <button onclick="switchTab('fluxo')" id="tab-fluxo" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📆 Fluxo Diário</button>
             <button onclick="switchTab('lancamentos')" id="tab-lancamentos" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📝 Lançamentos</button>
             <button onclick="switchTab('cartoes')" id="tab-cartoes" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">💳 Cartões & Faturas</button>
             <button onclick="switchTab('financiamentos')" id="tab-financiamentos" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🏠 Financiamentos</button>
@@ -128,6 +129,46 @@
                             </tr>
                         </thead>
                         <tbody id="tbody-dashboard-anual" class="divide-y divide-slate-800 text-right"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==========================================
+             ABA: FLUXO DE CAIXA DIÁRIO
+             ========================================== -->
+        <section id="view-fluxo" class="hidden space-y-6">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center gap-2">
+                    <h2 class="text-sm font-semibold text-white mr-2">📆 Fluxo de Caixa Diário</h2>
+                    <button type="button" onclick="navegarFluxo(-1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Mês anterior">◀</button>
+                    <span id="fluxoMesLabel" class="text-sm font-semibold text-white min-w-[130px] text-center">—</span>
+                    <button type="button" onclick="navegarFluxo(1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Próximo mês">▶</button>
+                    <button type="button" onclick="fluxoHoje()" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">Mês atual</button>
+                </div>
+                <label class="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                    <input type="checkbox" id="fluxoSoMovimento" onchange="renderizarFluxoDiario()"> Mostrar só dias com movimento
+                </label>
+            </div>
+
+            <div id="fluxoKpis" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3"></div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <h3 class="text-sm font-semibold text-slate-300 mb-3">Entradas e saídas por dia • saldo acumulado</h3>
+                <div class="h-60"><canvas id="chartFluxo"></canvas></div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div class="px-4 py-2.5 border-b border-slate-800 text-xs text-slate-400">
+                    Compras no cartão saem no <strong class="text-slate-200">vencimento da fatura</strong>. Saldo inicial = acumulado de todos os lançamentos anteriores ao mês. Clique em um dia para ver os lançamentos.
+                </div>
+                <div class="overflow-auto max-h-[620px]">
+                    <table class="w-full text-left border-collapse table-compact">
+                        <thead class="bg-slate-800 text-slate-300 sticky top-0 z-10">
+                            <tr><th>Dia</th><th>Movimentações</th><th class="text-right">Entradas</th><th class="text-right">Saídas</th>
+                                <th class="text-right">Saldo do dia</th><th class="text-right text-white">Saldo acumulado</th></tr>
+                        </thead>
+                        <tbody id="tbody-fluxo" class="divide-y divide-slate-800"></tbody>
                     </table>
                 </div>
             </div>
@@ -1249,7 +1290,7 @@
 
         // Alternância de Abas
         function switchTab(tab) {
-            ['dashboard', 'lancamentos', 'cartoes', 'financiamentos', 'categorias', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
+            ['dashboard', 'fluxo', 'lancamentos', 'cartoes', 'financiamentos', 'categorias', 'resumo', 'orcamento', 'planejamento'].forEach(t => {
                 const el = document.getElementById('view-' + t);
                 if (el) el.classList.add('hidden');
                 const btn = document.getElementById('tab-' + t);
@@ -1281,6 +1322,7 @@
 
         async function recarregarTudo() {
             await Promise.all([
+                carregarFluxoDiario(),
                 carregarCartoes(),
                 carregarFinanciamentos(),
                 carregarCategorias(),
@@ -1981,6 +2023,127 @@
         }
 
         // ==========================================
+        // FLUXO DE CAIXA DIÁRIO
+        // ==========================================
+        let fluxoMes = (() => { const d = new Date(); return { ano: d.getFullYear(), mes: d.getMonth() + 1 }; })();
+        let fluxoCache = null;
+        let chartFluxoInstance = null;
+        const DIAS_SEMANA_NOME = { seg: 'segunda', ter: 'terça', qua: 'quarta', qui: 'quinta', sex: 'sexta', 'sáb': 'sábado', dom: 'domingo' };
+
+        function navegarFluxo(delta) {
+            const t = fluxoMes.ano * 12 + (fluxoMes.mes - 1) + delta;
+            fluxoMes = { ano: Math.floor(t / 12), mes: (t % 12) + 1 };
+            carregarFluxoDiario();
+        }
+
+        function fluxoHoje() {
+            const d = new Date();
+            fluxoMes = { ano: d.getFullYear(), mes: d.getMonth() + 1 };
+            carregarFluxoDiario();
+        }
+
+        async function carregarFluxoDiario() {
+            const { ano, mes } = fluxoMes;
+            const ultimo = new Date(ano, mes, 0).getDate();
+            const mm = String(mes).padStart(2, '0');
+            const res = await fetch(`/api/fluxo-diario?inicio=${ano}-${mm}-01&fim=${ano}-${mm}-${ultimo}`);
+            if (!res.ok) return;
+            fluxoCache = await res.json();
+            document.getElementById('fluxoMesLabel').textContent = `${MESES_NOME[mes - 1]} ${ano}`;
+            renderizarFluxoDiario();
+        }
+
+        function renderizarFluxoDiario() {
+            const f = fluxoCache;
+            if (!f) return;
+            const corSaldo = v => v < 0 ? 'text-rose-400' : 'text-sky-300';
+            const kpi = (lbl, val, cls, sub = '') => `<div class="bg-slate-900 border border-slate-800 rounded-xl p-3"><span class="text-xs uppercase text-slate-400 font-semibold">${lbl}</span><div class="text-xl font-bold font-mono ${cls} mt-0.5">${val}</div>${sub ? `<div class="text-[11px] text-slate-500">${sub}</div>` : ''}</div>`;
+            document.getElementById('fluxoKpis').innerHTML =
+                kpi('Saldo inicial', fmtBRL(f.saldo_inicial), corSaldo(f.saldo_inicial), `em ${fmtData(f.inicio)}`) +
+                kpi('Entradas', fmtBRL(f.entradas), 'text-emerald-400') +
+                kpi('Saídas', fmtBRL(f.saidas), 'text-rose-400') +
+                kpi('Resultado do mês', fmtBRL(f.saldo_periodo), f.saldo_periodo < 0 ? 'text-rose-400' : 'text-emerald-400') +
+                kpi('Saldo final', fmtBRL(f.saldo_final), corSaldo(f.saldo_final), `em ${fmtData(f.fim)}`) +
+                kpi('Menor saldo', f.menor_saldo ? fmtBRL(f.menor_saldo.saldo) : '—', f.menor_saldo && f.menor_saldo.saldo < 0 ? 'text-rose-400' : 'text-amber-300',
+                    f.menor_saldo ? `em ${fmtData(f.menor_saldo.data)}${f.dias_negativos ? ` • ${f.dias_negativos} dia(s) negativo(s)` : ''}` : '');
+
+            const hoje = hojeISO();
+            const soMov = document.getElementById('fluxoSoMovimento').checked;
+            const dias = soMov ? f.dias.filter(d => d.qtd > 0) : f.dias;
+            document.getElementById('tbody-fluxo').innerHTML = dias.length ? dias.map(d => {
+                const fimSemana = d.dia_semana === 'sáb' || d.dia_semana === 'dom';
+                const ehHoje = d.data === hoje;
+                const futuro = d.data > hoje;
+                const comuns = d.itens.filter(i => !i.cartao_id);
+                const partes = [
+                    ...d.faturas.map(fa => `<span class="text-violet-300">💳 Fatura ${escHtml(fa.cartao)} ${fa.label}</span>`),
+                    ...comuns.slice(0, 3).map(i => `<span class="${i.tipo === 'Receita' ? 'text-emerald-300' : 'text-slate-300'}">${escHtml(i.descricao || i.categoria)}</span>`)
+                ];
+                const extra = comuns.length > 3 ? ` <span class="text-slate-500">+${comuns.length - 3}</span>` : '';
+                return `<tr class="${d.qtd ? 'cursor-pointer hover:bg-slate-800/50' : ''} ${ehHoje ? 'bg-sky-500/10 ring-1 ring-inset ring-sky-500/40' : ''} ${fimSemana && !ehHoje ? 'bg-slate-800/20' : ''}"
+                        ${d.qtd ? `onclick="abrirDiaFluxo('${d.data}')"` : ''}>
+                    <td class="whitespace-nowrap"><span class="font-mono text-sm ${futuro ? 'text-slate-400' : 'text-white'}">${d.data.slice(8)}/${d.data.slice(5, 7)}</span>
+                        <span class="text-[11px] ${fimSemana ? 'text-amber-300/70' : 'text-slate-500'} ml-1">${d.dia_semana}</span>${ehHoje ? ' <span class="text-[10px] text-sky-300 font-semibold">HOJE</span>' : ''}</td>
+                    <td class="text-xs">${partes.join(' · ')}${extra}</td>
+                    <td class="text-right font-mono ${d.entradas ? 'text-emerald-400' : 'text-slate-700'}">${d.entradas ? fmtNum(d.entradas) : '—'}</td>
+                    <td class="text-right font-mono ${d.saidas ? 'text-rose-400' : 'text-slate-700'}">${d.saidas ? fmtNum(d.saidas) : '—'}</td>
+                    <td class="text-right font-mono ${d.saldo_dia > 0 ? 'text-emerald-300' : d.saldo_dia < 0 ? 'text-rose-300' : 'text-slate-700'}">${d.qtd ? fmtNum(d.saldo_dia) : '—'}</td>
+                    <td class="text-right font-mono font-semibold ${d.saldo_acumulado < 0 ? 'text-rose-400' : 'text-white'}">${fmtNum(d.saldo_acumulado)}</td>
+                </tr>`;
+            }).join('') : '<tr><td colspan="6" class="text-center text-slate-500 py-6">Nenhuma movimentação neste mês.</td></tr>';
+
+            // Gráfico: barras de entradas/saídas e linha do saldo acumulado
+            if (typeof Chart === 'undefined') return;
+            if (chartFluxoInstance) chartFluxoInstance.destroy();
+            chartFluxoInstance = new Chart(document.getElementById('chartFluxo'), {
+                type: 'bar',
+                data: {
+                    labels: f.dias.map(d => d.data.slice(8)),
+                    datasets: [
+                        { label: 'Entradas', data: f.dias.map(d => d.entradas), backgroundColor: '#10b981', borderRadius: 3, yAxisID: 'y' },
+                        { label: 'Saídas', data: f.dias.map(d => -d.saidas), backgroundColor: '#f43f5e', borderRadius: 3, yAxisID: 'y' },
+                        { label: 'Saldo acumulado', data: f.dias.map(d => d.saldo_acumulado), type: 'line', borderColor: '#38bdf8',
+                          backgroundColor: '#38bdf8', borderWidth: 2, pointRadius: 0, tension: 0.2, yAxisID: 'y' }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { labels: { color: '#cbd5e1' } },
+                        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmtBRL(Math.abs(c.raw))}` } }
+                    },
+                    scales: {
+                        x: { stacked: true, ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
+                        y: { stacked: false, ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } }
+                    },
+                    onClick: (evt, els) => {
+                        if (!els.length) return;
+                        const d = f.dias[els[0].index];
+                        if (d && d.qtd) abrirDiaFluxo(d.data);
+                    }
+                }
+            });
+        }
+
+        function abrirDiaFluxo(data) {
+            const dia = fluxoCache.dias.find(d => d.data === data);
+            const nomeDia = DIAS_SEMANA_NOME[dia.dia_semana] || dia.dia_semana;
+            abrirResumoLancamentos({
+                titulo: `${fmtData(data)} (${nomeDia})`,
+                subtitulo: () => {
+                    const d = (fluxoCache.dias.find(x => x.data === data)) || dia;
+                    return `Entradas ${fmtBRL(d.entradas)} • saídas ${fmtBRL(d.saidas)} • saldo ao fim do dia ${fmtBRL(d.saldo_acumulado)}`
+                        + (d.faturas.length ? ` • inclui ${d.faturas.map(fa => `fatura ${fa.cartao} ${fa.label}`).join(', ')}` : '');
+                },
+                carregar: async () => {
+                    await carregarFluxoDiario();
+                    return (fluxoCache.dias.find(d => d.data === data) || { itens: [] }).itens;
+                }
+            });
+        }
+
+        // ==========================================
         // RESUMO DE LANÇAMENTOS AO CLICAR NAS MATRIZES
         // ==========================================
         const CLS_CELULA = 'cursor-pointer hover:bg-sky-500/10 hover:underline decoration-dotted underline-offset-2';
@@ -2009,14 +2172,20 @@
             const { ano, mes_inicio } = getPeriodoInicio();
             const params = new URLSearchParams({ ano, mes_inicio });
             Object.entries(def.filtros || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') params.append(k, v); });
-            const res = await fetch(`/api/lancamentos?${params.toString()}`);
-            const itens = res.ok ? await res.json() : [];
+            let itens;
+            if (def.carregar) {
+                itens = await def.carregar();
+            } else {
+                const res = await fetch(`/api/lancamentos?${params.toString()}`);
+                itens = res.ok ? await res.json() : [];
+            }
             resumoItensCache = itens;
 
             document.getElementById('resumoLancTitulo').textContent = def.titulo;
             const f = def.filtros || {};
-            const escopo = f.periodo ? '' : f.ate ? '' : `Período ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`;
-            document.getElementById('resumoLancSub').textContent = [def.subtitulo, escopo, `${itens.length} lançamento(s)`].filter(Boolean).join(' • ');
+            const escopo = def.carregar || f.periodo || f.ate ? '' : `Período ${periodosAtuais[0].label} → ${periodosAtuais[11].label}`;
+            const subtitulo = typeof def.subtitulo === 'function' ? def.subtitulo() : def.subtitulo;
+            document.getElementById('resumoLancSub').textContent = [subtitulo, escopo, `${itens.length} lançamento(s)`].filter(Boolean).join(' • ');
 
             const rec = itens.filter(i => i.tipo === 'Receita').reduce((a, i) => a + i.valor, 0);
             const desp = itens.filter(i => i.tipo === 'Despesa').reduce((a, i) => a + i.valor, 0);
@@ -2050,8 +2219,9 @@
                 const selo = i.financiamento_id && !i.amortizacao_id ? `🏠 ${i.parcela_num}/${i.parcela_total}`
                     : i.amortizacao_id ? '💰 extra' : i.recorrencia_id ? `🔁 ${i.parcela_num}/${i.parcela_total}` : '';
                 const competenciaDif = `${i.data.slice(0, 7)}` !== `${i.ano}-${String(i.mes).padStart(2, '0')}`;
+                const sub = i.vencimento_fatura ? `fatura vence ${fmtData(i.vencimento_fatura)}` : competenciaDif ? `compet. ${i.competencia}` : '';
                 return `<tr class="hover:bg-slate-800/50">
-                    <td class="font-mono text-xs text-slate-300 whitespace-nowrap">${fmtData(i.data)}${competenciaDif ? `<div class="text-[10px] text-slate-500">compet. ${i.competencia}</div>` : ''}</td>
+                    <td class="font-mono text-xs text-slate-300 whitespace-nowrap">${fmtData(i.data)}${sub ? `<div class="text-[10px] text-slate-500">${sub}</div>` : ''}</td>
                     <td class="text-white">${escHtml(i.descricao)}${selo ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-500/20 text-violet-300">${selo}</span>` : ''}</td>
                     <td class="text-xs text-slate-300">${escHtml(i.categoria)}<div class="text-[10px] text-slate-500">${escHtml(i.macro_categoria || '')}</div></td>
                     <td class="text-xs text-slate-400">${escHtml(i.forma_pgto || '')}${i.cartao_nome ? ` · 💳 ${escHtml(i.cartao_nome)}` : ''}</td>

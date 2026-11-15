@@ -2017,6 +2017,123 @@ def excluir_financiamento(fin_id: int):
     return {"status": "deleted", "id": fin_id, "lancamentos_removidos": removidos}
 
 
+# ==========================================
+# Fluxo de caixa diário
+# ==========================================
+DIAS_SEMANA = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
+
+
+@app.get("/api/fluxo-diario")
+def fluxo_diario(inicio: Optional[str] = None, fim: Optional[str] = None):
+    """
+    Entradas, saídas, saldo do dia e saldo acumulado, dia a dia, entre `inicio` e `fim` (YYYY-MM-DD;
+    padrão: mês atual).
+
+    Regra de caixa: lançamentos comuns contam na própria data; compras no cartão contam no
+    VENCIMENTO da fatura, agrupadas por cartão/fatura (é quando o dinheiro sai da conta).
+    O saldo inicial é o acumulado de tudo que ocorreu antes de `inicio`.
+    """
+    hoje = date.today()
+    try:
+        d_ini = datetime.strptime(inicio, "%Y-%m-%d").date() if inicio else hoje.replace(day=1)
+        d_fim = datetime.strptime(fim, "%Y-%m-%d").date() if fim else dia_no_mes(d_ini.year, d_ini.month, 31)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Datas inválidas. Use YYYY-MM-DD.")
+    if d_fim < d_ini:
+        raise HTTPException(status_code=400, detail="A data final deve ser posterior à inicial.")
+    if (d_fim - d_ini).days > 400:
+        raise HTTPException(status_code=400, detail="Período máximo de 400 dias.")
+    ini_s, fim_s = d_ini.isoformat(), d_fim.isoformat()
+
+    conn = get_db_connection()
+    cartoes = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM cartoes").fetchall()}
+
+    # Saldo anterior: lançamentos comuns antes do início
+    abertura = conn.execute(
+        """SELECT COALESCE(SUM(CASE WHEN tipo = 'Receita' THEN valor ELSE -valor END), 0)
+           FROM lancamentos WHERE cartao_id IS NULL AND data < ?""", (ini_s,)).fetchone()[0]
+
+    # Faturas (agrupadas): data de saída = vencimento
+    faturas = []
+    for r in conn.execute(
+        """SELECT cartao_id, ano, mes, SUM(CASE WHEN tipo = 'Receita' THEN -valor ELSE valor END) AS total, COUNT(*) AS qtd
+           FROM lancamentos WHERE cartao_id IS NOT NULL GROUP BY cartao_id, ano, mes""").fetchall():
+        c = cartoes.get(r["cartao_id"])
+        if not c:
+            continue
+        _, venc = datas_da_fatura(c, r["ano"], r["mes"])
+        if venc < d_ini:
+            abertura -= r["total"]
+        elif venc <= d_fim:
+            faturas.append({"cartao_id": c["id"], "cartao": c["nome"], "ano": r["ano"], "mes": r["mes"],
+                            "label": f"{MESES_ABREV[r['mes'] - 1]}/{str(r['ano'])[2:]}",
+                            "vencimento": venc.isoformat(), "total": round(r["total"], 2), "qtd": r["qtd"]})
+
+    comuns = [dict(r) for r in conn.execute(
+        """SELECT l.*, COALESCE(c.macro_categoria, 'Outros') AS macro_categoria FROM lancamentos l
+           LEFT JOIN categorias c ON c.nome = l.categoria
+           WHERE l.cartao_id IS NULL AND l.data BETWEEN ? AND ? ORDER BY l.data, l.id""", (ini_s, fim_s)).fetchall()]
+
+    # Itens das faturas do período (para detalhar o dia do vencimento)
+    itens_fatura = {}
+    for f in faturas:
+        itens_fatura[(f["cartao_id"], f["ano"], f["mes"])] = [dict(r, cartao_nome=f["cartao"], vencimento_fatura=f["vencimento"]) for r in conn.execute(
+            """SELECT l.*, COALESCE(c.macro_categoria, 'Outros') AS macro_categoria FROM lancamentos l
+               LEFT JOIN categorias c ON c.nome = l.categoria
+               WHERE l.cartao_id = ? AND l.ano = ? AND l.mes = ? ORDER BY l.data, l.id""",
+            (f["cartao_id"], f["ano"], f["mes"])).fetchall()]
+    conn.close()
+
+    dias = {}
+    d = d_ini
+    while d <= d_fim:
+        dias[d.isoformat()] = {"data": d.isoformat(), "dia_semana": DIAS_SEMANA[d.weekday()], "entradas": 0.0,
+                               "saidas": 0.0, "itens": [], "faturas": []}
+        d += timedelta(days=1)
+    for l in comuns:
+        dia = dias[l["data"]]
+        if l["tipo"] == "Receita":
+            dia["entradas"] += l["valor"]
+        else:
+            dia["saidas"] += l["valor"]
+        dia["itens"].append(l)
+    for f in faturas:
+        dia = dias[f["vencimento"]]
+        dia["saidas"] += f["total"]
+        dia["faturas"].append(f)
+        dia["itens"].extend(itens_fatura[(f["cartao_id"], f["ano"], f["mes"])])
+
+    saldo = abertura
+    lista = []
+    menor = None
+    for k in sorted(dias):
+        dia = dias[k]
+        dia["entradas"] = round(dia["entradas"], 2)
+        dia["saidas"] = round(dia["saidas"], 2)
+        dia["saldo_dia"] = round(dia["entradas"] - dia["saidas"], 2)
+        saldo += dia["saldo_dia"]
+        dia["saldo_acumulado"] = round(saldo, 2)
+        dia["qtd"] = len([i for i in dia["itens"] if not i.get("cartao_id")]) + len(dia["faturas"])
+        if menor is None or dia["saldo_acumulado"] < menor["saldo"]:
+            menor = {"data": k, "saldo": dia["saldo_acumulado"]}
+        lista.append(dia)
+
+    entradas = round(sum(x["entradas"] for x in lista), 2)
+    saidas = round(sum(x["saidas"] for x in lista), 2)
+    return {
+        "inicio": ini_s,
+        "fim": fim_s,
+        "saldo_inicial": round(abertura, 2),
+        "saldo_final": round(saldo, 2),
+        "entradas": entradas,
+        "saidas": saidas,
+        "saldo_periodo": round(entradas - saidas, 2),
+        "menor_saldo": menor,
+        "dias_negativos": sum(1 for x in lista if x["saldo_acumulado"] < 0),
+        "dias": lista,
+    }
+
+
 @app.get("/api/dashboard")
 def obter_dashboard(ano: int = 2026, mes_inicio: int = 1):
     """
