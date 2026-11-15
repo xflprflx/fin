@@ -37,7 +37,7 @@
             <button onclick="switchTab('categorias')" id="tab-categorias" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🏷️ Categorias</button>
             <button onclick="switchTab('resumo')" id="tab-resumo" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📥 Receitas & Despesas</button>
             <button onclick="switchTab('orcamento')" id="tab-orcamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">📋 Orçamento vs Real</button>
-            <button onclick="switchTab('planejamento')" id="tab-planejamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🎯 Metas, Dívidas & Reserva</button>
+            <button onclick="switchTab('planejamento')" id="tab-planejamento" class="px-4 py-2 text-sm text-slate-400 hover:text-white transition">🎯 Metas, Investimentos, Dívidas & Reserva</button>
         </nav>
 
         <!-- Linha do tempo global: janela de 12 meses que pode começar em qualquer mês -->
@@ -750,105 +750,114 @@
              ========================================== -->
         <section id="view-planejamento" class="hidden space-y-6">
             <!-- Reserva de Emergência -->
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-4">
                     <div>
                         <h2 class="text-base font-bold text-amber-400">🛡 Reserva de Emergência</h2>
-                        <p class="text-xs text-slate-400">Cálculo automático da meta com base no seu custo de vida mensal.</p>
+                        <p class="text-xs text-slate-400">Meta = custo de vida mensal × meses de segurança. Registre aportes e resgates para manter o saldo em dia.</p>
                     </div>
-                    <div id="badgeStatusReserva" class="px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-400">
-                        🔴 Abaixo da Meta
-                    </div>
+                    <div id="badgeStatusReserva" class="px-3 py-1 rounded-full text-xs font-bold bg-slate-800 text-slate-300">—</div>
                 </div>
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">Despesa Média Automática</label>
-                        <input type="text" id="resMediaAuto" disabled class="w-full rounded px-3 py-1.5 text-sm opacity-75 font-mono">
+                <div id="resKpis" class="grid grid-cols-2 lg:grid-cols-4 gap-3"></div>
+                <div class="h-2 bg-slate-800 rounded-full overflow-hidden"><div id="resBarra" class="h-full bg-amber-500" style="width:0%"></div></div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <!-- Configuração -->
+                    <div class="border border-slate-800 rounded-lg p-3 space-y-3">
+                        <h3 class="text-xs uppercase text-slate-400 font-semibold">⚙️ Configuração</h3>
+                        <div class="grid grid-cols-2 gap-3 items-end">
+                            <div class="col-span-2">
+                                <label class="block text-xs text-slate-400 mb-1">Custo de vida mensal (base da meta)</label>
+                                <div class="flex flex-col sm:flex-row gap-2 text-sm">
+                                    <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 cursor-pointer"><input type="radio" name="resBase" value="1" onchange="atualizarCamposReserva()"> <span>Média automática <span id="resMediaAutoTxt" class="text-slate-400 text-xs"></span></span></label>
+                                    <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 cursor-pointer"><input type="radio" name="resBase" value="0" onchange="atualizarCamposReserva()"> Valor manual</label>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-400 mb-1">Valor manual (R$/mês)</label>
+                                <input type="number" id="resManual" min="0" step="0.01" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-400 mb-1">Meses de segurança</label>
+                                <input type="number" id="resMeses" min="1" max="60" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-400 mb-1" title="Ajuste direto do saldo (ex.: conferência com o banco). Para entradas e saídas use Aporte/Resgate.">Saldo atual (ajuste direto)</label>
+                                <input type="number" id="resSaldoAtual" min="0" step="0.01" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                            </div>
+                            <div>
+                                <button onclick="salvarReservaConfig()" class="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold py-1.5 px-4 rounded text-sm transition">💾 Salvar configuração</button>
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">Meses de Segurança Desejados</label>
-                        <input type="number" id="resMeses" min="1" max="36" class="w-full rounded px-3 py-1.5 text-sm font-mono">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">Meta Total Calculada (R$)</label>
-                        <input type="text" id="resMetaTotal" disabled class="w-full rounded px-3 py-1.5 text-sm font-bold text-amber-400 font-mono">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">Saldo Atual Guardado (R$)</label>
-                        <input type="number" id="resSaldoAtual" step="0.01" class="w-full rounded px-3 py-1.5 text-sm font-mono">
-                    </div>
-                    <div>
-                        <button onclick="salvarReservaConfig()" class="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold py-1.5 px-4 rounded text-sm transition">
-                            Atualizar Reserva
-                        </button>
+                    <!-- Movimentações -->
+                    <div class="border border-slate-800 rounded-lg p-3 space-y-3">
+                        <h3 class="text-xs uppercase text-slate-400 font-semibold">💸 Aporte / Resgate</h3>
+                        <form id="formMovReserva" onsubmit="lancarMovimentoReserva(event)" class="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+                            <div>
+                                <label class="block text-xs text-slate-400 mb-1">Data *</label>
+                                <input type="date" id="movResData" required class="w-full rounded px-2 py-1.5 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-400 mb-1">Tipo *</label>
+                                <select id="movResTipo" class="w-full rounded px-2 py-1.5 text-sm"><option value="aporte">➕ Aporte</option><option value="resgate">➖ Resgate</option></select>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-400 mb-1">Valor (R$) *</label>
+                                <input type="number" id="movResValor" required min="0.01" step="0.01" class="w-full rounded px-2 py-1.5 text-sm font-mono">
+                            </div>
+                            <div>
+                                <button type="submit" class="w-full bg-slate-800 hover:bg-amber-500 hover:text-slate-950 border border-slate-700 font-semibold py-1.5 rounded text-sm transition">Lançar</button>
+                            </div>
+                            <div class="col-span-2 sm:col-span-4">
+                                <input type="text" id="movResDesc" placeholder="Descrição (opcional) — ex.: 13º salário, conserto do carro" class="w-full rounded px-2 py-1.5 text-sm">
+                            </div>
+                        </form>
+                        <div id="listaMovReserva" class="space-y-1 max-h-44 overflow-y-auto"></div>
                     </div>
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- Metas Financeiras -->
-                <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                    <div class="px-4 py-3 border-b border-slate-800">
-                        <h3 class="text-sm font-semibold text-white">🎯 Metas Financeiras</h3>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left border-collapse table-compact">
-                            <thead class="bg-slate-800 text-slate-300">
-                                <tr>
-                                    <th>Meta</th>
-                                    <th>Prazo</th>
-                                    <th class="text-right">Valor Alvo (R$)</th>
-                                    <th class="text-right">Valor Atual (R$)</th>
-                                    <th class="text-right">Progresso</th>
-                                    <th class="text-center">Salvar</th>
-                                </tr>
-                            </thead>
-                            <tbody id="tbody-metas" class="divide-y divide-slate-800"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- Carteira de Investimentos -->
-                <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                    <div class="px-4 py-3 border-b border-slate-800">
-                        <h3 class="text-sm font-semibold text-white">📈 Controle de Investimentos</h3>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left border-collapse table-compact">
-                            <thead class="bg-slate-800 text-slate-300">
-                                <tr>
-                                    <th>Ativo / Fundo</th>
-                                    <th>Classe</th>
-                                    <th class="text-right">Saldo Inicial</th>
-                                    <th class="text-right">Saldo Atual</th>
-                                    <th class="text-right">Rentab. (%)</th>
-                                    <th class="text-center">Salvar</th>
-                                </tr>
-                            </thead>
-                            <tbody id="tbody-investimentos" class="divide-y divide-slate-800"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Controle de Dívidas (Método Avalanche) -->
+            <!-- Metas Financeiras -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-                <div class="px-4 py-3 border-b border-slate-800 flex justify-between items-center">
-                    <h3 class="text-sm font-semibold text-white">💳 Dívidas e Parcelamentos (Ordenado por Juros — Método Avalanche)</h3>
-                    <span class="text-xs text-amber-400">⚠️ Priorize a quitação das dívidas com maior taxa de juros mensal</span>
+                <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap gap-2 justify-between items-center">
+                    <h3 class="text-sm font-semibold text-white">🎯 Metas Financeiras</h3>
+                    <button onclick="abrirItemPlan('meta')" class="px-3 py-1.5 rounded text-xs font-semibold bg-sky-500 hover:bg-sky-400 text-slate-950">＋ Nova meta</button>
+                </div>
+                <div id="listaMetas" class="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3"></div>
+            </div>
+
+            <!-- Carteira de Investimentos -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap gap-2 justify-between items-center">
+                    <h3 class="text-sm font-semibold text-white">📈 Investimentos</h3>
+                    <button onclick="abrirItemPlan('investimento')" class="px-3 py-1.5 rounded text-xs font-semibold bg-sky-500 hover:bg-sky-400 text-slate-950">＋ Novo investimento</button>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left border-collapse table-compact">
                         <thead class="bg-slate-800 text-slate-300">
-                            <tr>
-                                <th>Dívida / Credor</th>
-                                <th>Tipo</th>
-                                <th class="text-right">Saldo Devedor (R$)</th>
-                                <th class="text-right">Taxa Juros/mês (%)</th>
-                                <th class="text-right">Parcela Mín. (R$)</th>
-                                <th class="text-right">Parcelas Rest.</th>
-                                <th class="text-center">Salvar</th>
-                            </tr>
+                            <tr><th>Ativo / Fundo</th><th>Classe</th><th class="text-right">Aplicado</th><th class="text-right">Saldo atual</th>
+                                <th class="text-right">Rendimento</th><th class="text-right">Rentab.</th><th class="text-center">Ações</th></tr>
+                        </thead>
+                        <tbody id="tbody-investimentos" class="divide-y divide-slate-800"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Dívidas (Método Avalanche) -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap gap-2 justify-between items-center">
+                    <div>
+                        <h3 class="text-sm font-semibold text-white">💳 Dívidas e Parcelamentos — Método Avalanche</h3>
+                        <p class="text-xs text-amber-400">⚠️ Ordenadas pelos maiores juros: priorize quitar as do topo. Financiamentos vêm da aba 🏠 Financiamentos.</p>
+                    </div>
+                    <button onclick="abrirItemPlan('divida')" class="px-3 py-1.5 rounded text-xs font-semibold bg-sky-500 hover:bg-sky-400 text-slate-950">＋ Nova dívida</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse table-compact">
+                        <thead class="bg-slate-800 text-slate-300">
+                            <tr><th class="text-center">#</th><th>Dívida / Credor</th><th>Tipo</th><th class="text-right">Saldo devedor</th><th class="text-right">Juros a.m.</th>
+                                <th class="text-right">Parcela</th><th class="text-right">Parcelas rest.</th><th class="text-center">Ações</th></tr>
                         </thead>
                         <tbody id="tbody-dividas" class="divide-y divide-slate-800"></tbody>
                     </table>
@@ -943,6 +952,25 @@
             </form>
         </div>
     </div>
+
+    <!-- Modal genérico: Meta / Investimento / Dívida -->
+    <div id="modalItemPlan" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick="if (event.target === this) fecharItemPlan()">
+        <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-lg shadow-2xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 id="itemPlanTitulo" class="text-base font-semibold text-white"></h3>
+                <button type="button" onclick="fecharItemPlan()" class="text-slate-400 hover:text-white text-lg">✕</button>
+            </div>
+            <form id="formItemPlan" onsubmit="salvarItemPlan(event)" class="space-y-3">
+                <div id="itemPlanCampos" class="grid grid-cols-2 gap-3"></div>
+                <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="fecharItemPlan()" class="px-4 py-2 rounded text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700">Cancelar</button>
+                    <button type="submit" class="px-5 py-2 rounded text-sm font-semibold text-slate-950 bg-sky-500 hover:bg-sky-400">💾 Salvar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <datalist id="dlClassesInv"><option value="Renda Fixa"><option value="Tesouro Direto"><option value="CDB / LCI / LCA"><option value="Ações"><option value="FIIs"><option value="ETFs"><option value="Fundos"><option value="Previdência"><option value="Cripto"><option value="Exterior"><option value="Poupança"></datalist>
+    <datalist id="dlTiposDiv"><option value="Cartão (rotativo)"><option value="Cheque especial"><option value="Empréstimo pessoal"><option value="Consignado"><option value="CDC / Veículo"><option value="Parcelamento"><option value="Familiar / Amigos"><option value="Outros"></datalist>
 
     <!-- Modal de Resumo de Lançamentos (aberto ao clicar em valores das matrizes) -->
     <div id="modalResumoLanc" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick="if (event.target === this) fecharResumoLancamentos()">
@@ -2052,7 +2080,8 @@
 
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
-            if (!document.getElementById('modalEditarLancamento').classList.contains('hidden')) fecharModalEditarLancamento();
+            if (!document.getElementById('modalItemPlan').classList.contains('hidden')) fecharItemPlan();
+            else if (!document.getElementById('modalEditarLancamento').classList.contains('hidden')) fecharModalEditarLancamento();
             else if (!document.getElementById('modalResumoLanc').classList.contains('hidden')) fecharResumoLancamentos();
         });
 
@@ -3020,103 +3049,274 @@
         }
 
         // 4. Planejamento: Reserva, Metas, Investimentos e Dívidas
+        // ==========================================
+        // METAS, INVESTIMENTOS, DÍVIDAS E RESERVA
+        // ==========================================
+        let planCache = null;
+        let itemPlanAtual = null; // { tipo, id }
+
+        const fmtMesAno = (prazo) => prazo && prazo.length === 7 ? `${MESES_ABREV[parseInt(prazo.slice(5), 10) - 1]}/${prazo.slice(0, 4)}` : (prazo || '—');
+        const btnAcao = (onclick, title, icon, hover = 'hover:text-sky-400') =>
+            `<button onclick="${onclick}" class="text-slate-400 ${hover} px-1.5 py-0.5 rounded hover:bg-slate-800 text-xs" title="${title}">${icon}</button>`;
+
         async function carregarPlanejamento() {
             const res = await fetch(`/api/planejamento?${qsPeriodo()}`);
             const data = await res.json();
+            planCache = data;
+            renderizarReserva(data.reserva);
+            renderizarMetas(data.metas);
+            renderizarInvestimentos(data.investimentos, data.totais_investimentos);
+            renderizarDividas(data.dividas, data.totais_dividas);
+        }
 
-            // Reserva
-            const r = data.reserva;
-            document.getElementById('resMediaAuto').value = fmtBRL(r.despesa_media_calculada);
-            document.getElementById('resMeses').value = r.meses_seguranca;
-            document.getElementById('resMetaTotal').value = fmtBRL(r.meta_total_reserva);
-            document.getElementById('resSaldoAtual').value = r.saldo_atual_reserva;
-
+        // ---------- Reserva ----------
+        function renderizarReserva(r) {
+            const kpi = (lbl, val, cls, sub = '') => `<div class="bg-slate-800/50 rounded-lg p-3"><span class="text-xs text-slate-400">${lbl}</span><div class="text-lg font-bold font-mono ${cls}">${val}</div>${sub ? `<div class="text-[11px] text-slate-500">${sub}</div>` : ''}</div>`;
+            document.getElementById('resKpis').innerHTML =
+                kpi('Saldo guardado', fmtBRL(r.saldo_atual_reserva), 'text-amber-300', r.meses_cobertos != null ? `cobre ${r.meses_cobertos.toLocaleString('pt-BR')} mês(es) de custo` : '') +
+                kpi('Meta', fmtBRL(r.meta_total_reserva), 'text-white', `${r.meses_seguranca} × ${fmtBRL(r.despesa_base)}`) +
+                kpi('Falta', fmtBRL(r.falta), r.falta > 0 ? 'text-rose-400' : 'text-emerald-400') +
+                kpi('Custo de vida (base)', fmtBRL(r.despesa_base), 'text-slate-200', r.usar_media_automatica ? `média de ${r.meses_com_despesa} mês(es) no período` : 'valor manual');
+            document.getElementById('resBarra').style.width = `${Math.min(100, r.progresso_pct)}%`;
             const badge = document.getElementById('badgeStatusReserva');
-            if (r.saldo_atual_reserva >= r.meta_total_reserva && r.meta_total_reserva > 0) {
-                badge.textContent = `🟢 Meta Atingida (${r.progresso_pct}%)`;
+            if (r.meta_total_reserva <= 0) {
+                badge.textContent = 'Defina o custo de vida';
+                badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-slate-800 text-slate-300';
+            } else if (r.saldo_atual_reserva >= r.meta_total_reserva) {
+                badge.textContent = `🟢 Meta atingida (${r.progresso_pct}%)`;
                 badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400';
             } else {
-                badge.textContent = `🔴 Abaixo da Meta (${r.progresso_pct}%)`;
+                badge.textContent = `🔴 Abaixo da meta (${r.progresso_pct}%)`;
                 badge.className = 'px-3 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-400';
             }
+            document.getElementById('resMediaAutoTxt').textContent = `(${fmtBRL(r.despesa_media_calculada)})`;
+            document.querySelector(`input[name="resBase"][value="${r.usar_media_automatica ? 1 : 0}"]`).checked = true;
+            document.getElementById('resManual').value = r.despesa_media_manual || '';
+            document.getElementById('resMeses').value = r.meses_seguranca;
+            document.getElementById('resSaldoAtual').value = r.saldo_atual_reserva;
+            const inpData = document.getElementById('movResData');
+            if (!inpData.value) inpData.value = hojeISO();
+            atualizarCamposReserva();
 
-            // Metas
-            document.getElementById('tbody-metas').innerHTML = data.metas.map(m => {
-                const pct = m.valor_alvo > 0 ? Math.min(100, ((m.valor_atual / m.valor_alvo) * 100)).toFixed(1) : 0;
-                return `<tr>
-                    <td class="font-medium text-white">${m.nome}</td>
-                    <td><input type="text" id="meta-prazo-${m.id}" value="${m.prazo}" class="w-24 rounded px-2 py-1 text-xs"></td>
-                    <td class="text-right"><input type="number" id="meta-alvo-${m.id}" value="${m.valor_alvo}" class="w-28 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                    <td class="text-right"><input type="number" id="meta-atual-${m.id}" value="${m.valor_atual}" class="w-28 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                    <td class="text-right font-mono text-xs text-sky-400">${pct}%</td>
-                    <td class="text-center"><button onclick="salvarMeta(${m.id})" class="bg-slate-800 hover:bg-sky-500 hover:text-slate-950 px-2.5 py-1 rounded text-xs transition">💾</button></td>
-                </tr>`;
-            }).join('');
+            document.getElementById('listaMovReserva').innerHTML = r.movimentos.length ? r.movimentos.map(m => `
+                <div class="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded bg-slate-800/50 text-xs">
+                    <span><span class="font-mono text-slate-400">${fmtData(m.data)}</span>
+                        <strong class="${m.tipo === 'aporte' ? 'text-emerald-400' : 'text-rose-400'}">${m.tipo === 'aporte' ? '+' : '−'}${fmtBRL(m.valor)}</strong>
+                        <span class="text-slate-300">${escHtml(m.descricao || (m.tipo === 'aporte' ? 'Aporte' : 'Resgate'))}</span></span>
+                    ${btnAcao(`excluirMovimentoReserva(${m.id})`, 'Desfazer (estorna o saldo)', '🗑️', 'hover:text-rose-400')}
+                </div>`).join('') : '<div class="text-xs text-slate-500">Nenhuma movimentação registrada.</div>';
+        }
 
-            // Investimentos
-            document.getElementById('tbody-investimentos').innerHTML = data.investimentos.map(i => `<tr>
-                <td class="font-medium text-white">${i.ativo}</td>
-                <td class="text-xs text-slate-400">${i.classe}</td>
-                <td class="text-right"><input type="number" id="inv-ini-${i.id}" value="${i.saldo_inicial}" class="w-24 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                <td class="text-right"><input type="number" id="inv-atu-${i.id}" value="${i.saldo_atual}" class="w-24 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                <td class="text-right"><input type="number" step="0.01" id="inv-rent-${i.id}" value="${i.rentabilidade_pct}" class="w-20 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                <td class="text-center"><button onclick="salvarInvestimento(${i.id})" class="bg-slate-800 hover:bg-sky-500 hover:text-slate-950 px-2.5 py-1 rounded text-xs transition">💾</button></td>
-            </tr>`).join('');
-
-            // Dívidas
-            document.getElementById('tbody-dividas').innerHTML = data.dividas.map(d => `<tr>
-                <td class="font-medium text-white">${d.credor}</td>
-                <td class="text-xs text-slate-400">${d.tipo}</td>
-                <td class="text-right"><input type="number" id="div-sal-${d.id}" value="${d.saldo_devedor}" class="w-28 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                <td class="text-right"><input type="number" step="0.01" id="div-jur-${d.id}" value="${d.taxa_juros_mes}" class="w-20 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                <td class="text-right"><input type="number" id="div-par-${d.id}" value="${d.parcela_min}" class="w-24 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                <td class="text-right"><input type="number" id="div-rest-${d.id}" value="${d.parcelas_rest}" class="w-20 text-right rounded px-2 py-1 text-xs font-mono"></td>
-                <td class="text-center"><button onclick="salvarDivida(${d.id})" class="bg-slate-800 hover:bg-sky-500 hover:text-slate-950 px-2.5 py-1 rounded text-xs transition">💾</button></td>
-            </tr>`).join('');
+        function atualizarCamposReserva() {
+            const manual = document.querySelector('input[name="resBase"]:checked')?.value === '0';
+            const inp = document.getElementById('resManual');
+            inp.disabled = !manual;
+            inp.classList.toggle('opacity-50', !manual);
         }
 
         async function salvarReservaConfig() {
+            const manual = document.querySelector('input[name="resBase"]:checked')?.value === '0';
+            const valorManual = parseFloat(document.getElementById('resManual').value || 0);
+            if (manual && !(valorManual > 0)) { alert('Informe o custo de vida mensal manual.'); return; }
             const payload = {
-                despesa_media_manual: 0,
-                usar_media_automatica: 1,
-                meses_seguranca: parseInt(document.getElementById('resMeses').value || 6),
+                despesa_media_manual: valorManual,
+                usar_media_automatica: manual ? 0 : 1,
+                meses_seguranca: parseInt(document.getElementById('resMeses').value || 6, 10),
                 saldo_atual_reserva: parseFloat(document.getElementById('resSaldoAtual').value || 0)
             };
-            await fetch('/api/reserva', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+            const res = await fetch('/api/reserva', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!res.ok) { alert('Erro: ' + msgErro(await res.json().catch(() => ({})))); return; }
             await reloadAll();
         }
 
-        async function salvarMeta(id) {
+        async function lancarMovimentoReserva(e) {
+            e.preventDefault();
             const payload = {
-                id,
-                prazo: document.getElementById(`meta-prazo-${id}`).value,
-                valor_alvo: parseFloat(document.getElementById(`meta-alvo-${id}`).value || 0),
-                valor_atual: parseFloat(document.getElementById(`meta-atual-${id}`).value || 0)
+                data: document.getElementById('movResData').value,
+                tipo: document.getElementById('movResTipo').value,
+                valor: parseFloat(document.getElementById('movResValor').value),
+                descricao: document.getElementById('movResDesc').value
             };
-            await fetch('/api/metas', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+            const res = await fetch('/api/reserva/movimentos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!res.ok) { alert('Erro: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            document.getElementById('movResValor').value = '';
+            document.getElementById('movResDesc').value = '';
             await reloadAll();
         }
 
-        async function salvarInvestimento(id) {
-            const payload = {
-                id,
-                saldo_inicial: parseFloat(document.getElementById(`inv-ini-${id}`).value || 0),
-                saldo_atual: parseFloat(document.getElementById(`inv-atu-${id}`).value || 0),
-                rentabilidade_pct: parseFloat(document.getElementById(`inv-rent-${id}`).value || 0)
-            };
-            await fetch('/api/investimentos', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+        async function excluirMovimentoReserva(id) {
+            if (!confirm('Desfazer esta movimentação? O saldo da reserva será estornado.')) return;
+            await fetch(`/api/reserva/movimentos/${id}`, { method: 'DELETE' });
             await reloadAll();
         }
 
-        async function salvarDivida(id) {
-            const payload = {
-                id,
-                saldo_devedor: parseFloat(document.getElementById(`div-sal-${id}`).value || 0),
-                taxa_juros_mes: parseFloat(document.getElementById(`div-jur-${id}`).value || 0),
-                parcela_min: parseFloat(document.getElementById(`div-par-${id}`).value || 0),
-                parcelas_rest: parseInt(document.getElementById(`div-rest-${id}`).value || 0)
-            };
-            await fetch('/api/dividas', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+        // ---------- Metas ----------
+        function renderizarMetas(metas) {
+            const el = document.getElementById('listaMetas');
+            if (!metas.length) {
+                el.innerHTML = '<div class="md:col-span-2 xl:col-span-3 text-center text-sm text-slate-400 py-6 border border-dashed border-slate-700 rounded-lg">Nenhuma meta cadastrada. Clique em <strong>＋ Nova meta</strong>.</div>';
+                return;
+            }
+            el.innerHTML = metas.map(m => {
+                const status = m.atingida ? '<span class="px-2 py-0.5 rounded-full text-[11px] bg-emerald-500/20 text-emerald-300">Atingida</span>'
+                    : m.atrasada ? '<span class="px-2 py-0.5 rounded-full text-[11px] bg-rose-500/20 text-rose-300">Prazo vencido</span>' : '';
+                const prazoTxt = m.meses_restantes == null ? '' : m.meses_restantes > 0 ? `faltam ${m.meses_restantes} mês(es)` : m.meses_restantes === 0 ? 'vence este mês' : `venceu há ${-m.meses_restantes} mês(es)`;
+                return `<div class="border border-slate-800 rounded-lg p-3 space-y-2 bg-slate-800/20">
+                    <div class="flex items-start justify-between gap-2">
+                        <div><div class="font-semibold text-white">${escHtml(m.nome)} ${status}</div>
+                            <div class="text-xs text-slate-400">Prazo ${fmtMesAno(m.prazo)}${prazoTxt ? ` • ${prazoTxt}` : ''}</div></div>
+                        <div class="flex shrink-0">${btnAcao(`abrirItemPlan('meta', ${m.id})`, 'Editar', '✏️')}${btnAcao(`excluirItemPlan('meta', ${m.id})`, 'Excluir', '🗑️', 'hover:text-rose-400')}</div>
+                    </div>
+                    <div class="flex justify-between text-xs"><span class="text-slate-300 font-mono">${fmtBRL(m.valor_atual)} <span class="text-slate-500">de ${fmtBRL(m.valor_alvo)}</span></span><span class="text-sky-400 font-mono">${m.progresso_pct}%</span></div>
+                    <div class="h-2 bg-slate-800 rounded-full overflow-hidden"><div class="h-full ${m.atingida ? 'bg-emerald-500' : 'bg-sky-500'}" style="width:${m.progresso_pct}%"></div></div>
+                    ${m.aporte_mensal_necessario ? `<div class="text-xs text-slate-400">Guardar <strong class="text-white">${fmtBRL(m.aporte_mensal_necessario)}/mês</strong> para chegar no prazo (faltam ${fmtBRL(m.falta)}).</div>` : m.falta > 0 ? `<div class="text-xs text-slate-400">Faltam ${fmtBRL(m.falta)}.</div>` : ''}
+                    <div class="flex gap-1.5 pt-1">
+                        <input type="number" id="aporte-meta-${m.id}" min="0.01" step="0.01" placeholder="Valor" class="flex-1 min-w-0 rounded px-2 py-1 text-xs font-mono">
+                        <button onclick="aportarMeta(${m.id}, 1)" class="px-2 py-1 rounded text-xs bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">＋ Aportar</button>
+                        <button onclick="aportarMeta(${m.id}, -1)" class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-300 hover:bg-slate-700">− Retirar</button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        async function aportarMeta(id, sinal) {
+            const v = parseFloat(document.getElementById(`aporte-meta-${id}`).value || 0);
+            if (!(v > 0)) { alert('Informe o valor.'); return; }
+            const res = await fetch(`/api/metas/${id}/aporte`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ valor: v * sinal }) });
+            if (!res.ok) { alert('Erro: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            await reloadAll();
+        }
+
+        // ---------- Investimentos ----------
+        function renderizarInvestimentos(lista, tot) {
+            const tbody = document.getElementById('tbody-investimentos');
+            if (!lista.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-500 py-6">Nenhum investimento cadastrado. Clique em <strong>＋ Novo investimento</strong>.</td></tr>';
+                return;
+            }
+            const cor = v => v > 0 ? 'text-emerald-400' : v < 0 ? 'text-rose-400' : 'text-slate-400';
+            tbody.innerHTML = lista.map(i => `<tr class="hover:bg-slate-800/40">
+                <td class="font-medium text-white">${escHtml(i.ativo)}</td>
+                <td class="text-xs text-slate-400">${escHtml(i.classe)}</td>
+                <td class="text-right font-mono text-slate-300">${fmtBRL(i.saldo_inicial)}</td>
+                <td class="text-right font-mono text-white">${fmtBRL(i.saldo_atual)}</td>
+                <td class="text-right font-mono ${cor(i.rendimento)}">${fmtBRL(i.rendimento)}</td>
+                <td class="text-right font-mono ${cor(i.rentabilidade_pct)}">${fmtPct(i.rentabilidade_pct, 2)}</td>
+                <td class="text-center whitespace-nowrap">${btnAcao(`abrirItemPlan('investimento', ${i.id})`, 'Editar', '✏️')}${btnAcao(`excluirItemPlan('investimento', ${i.id})`, 'Excluir', '🗑️', 'hover:text-rose-400')}</td>
+            </tr>`).join('') + `<tr class="bg-slate-800/40 font-semibold">
+                <td class="text-slate-300" colspan="2">Total</td>
+                <td class="text-right font-mono text-slate-300">${fmtBRL(tot.aplicado)}</td>
+                <td class="text-right font-mono text-white">${fmtBRL(tot.atual)}</td>
+                <td class="text-right font-mono ${cor(tot.rendimento)}">${fmtBRL(tot.rendimento)}</td>
+                <td class="text-right font-mono ${cor(tot.rentabilidade_pct)}">${fmtPct(tot.rentabilidade_pct, 2)}</td><td></td></tr>`;
+        }
+
+        // ---------- Dívidas ----------
+        function renderizarDividas(lista, tot) {
+            const tbody = document.getElementById('tbody-dividas');
+            if (!lista.length) {
+                tbody.innerHTML = '<tr><td colspan="8" class="text-center text-slate-500 py-6">Nenhuma dívida cadastrada. 🎉</td></tr>';
+                return;
+            }
+            tbody.innerHTML = lista.map((d, idx) => {
+                const fin = d.origem === 'financiamento';
+                const acoes = fin
+                    ? `<button onclick="abrirCronograma(${d.financiamento_id})" class="text-xs text-sky-300 hover:underline" title="Editar na aba Financiamentos">🏠 abrir</button>`
+                    : btnAcao(`abrirItemPlan('divida', ${d.id})`, 'Editar', '✏️') + btnAcao(`excluirItemPlan('divida', ${d.id})`, 'Excluir', '🗑️', 'hover:text-rose-400');
+                return `<tr class="hover:bg-slate-800/40">
+                    <td class="text-center text-xs text-slate-500">${idx + 1}</td>
+                    <td class="font-medium text-white">${escHtml(d.credor)}</td>
+                    <td class="text-xs text-slate-400">${escHtml(d.tipo)}</td>
+                    <td class="text-right font-mono text-rose-300">${fmtBRL(d.saldo_devedor)}</td>
+                    <td class="text-right font-mono ${d.taxa_juros_mes >= 5 ? 'text-rose-400 font-bold' : d.taxa_juros_mes >= 2 ? 'text-amber-300' : 'text-slate-300'}">${fmtPct(d.taxa_juros_mes, 2)}</td>
+                    <td class="text-right font-mono text-slate-200">${fmtBRL(d.parcela_min)}</td>
+                    <td class="text-right font-mono text-slate-300">${d.parcelas_rest}</td>
+                    <td class="text-center whitespace-nowrap">${acoes}</td>
+                </tr>`;
+            }).join('') + `<tr class="bg-slate-800/40 font-semibold"><td></td><td class="text-slate-300" colspan="2">Total</td>
+                <td class="text-right font-mono text-rose-300">${fmtBRL(tot.saldo)}</td><td></td>
+                <td class="text-right font-mono text-white">${fmtBRL(tot.parcelas_mes)}<div class="text-[10px] text-slate-500 font-normal">por mês</div></td><td colspan="2"></td></tr>`;
+        }
+
+        // ---------- Modal genérico (criar/editar) ----------
+        const ITENS_PLAN = {
+            meta: {
+                titulo: 'meta', rota: 'metas', lista: () => planCache.metas,
+                campos: [
+                    { id: 'nome', label: 'Nome da meta *', type: 'text', span: 2, required: true, placeholder: 'Ex: Viagem, Entrada do apê, Carro' },
+                    { id: 'prazo', label: 'Prazo (mês/ano) *', type: 'month', required: true },
+                    { id: 'valor_alvo', label: 'Valor alvo (R$) *', type: 'number', step: '0.01', min: '0.01', required: true },
+                    { id: 'valor_atual', label: 'Já guardado (R$)', type: 'number', step: '0.01', min: '0', def: 0 }
+                ]
+            },
+            investimento: {
+                titulo: 'investimento', rota: 'investimentos', lista: () => planCache.investimentos,
+                campos: [
+                    { id: 'ativo', label: 'Ativo / fundo *', type: 'text', span: 2, required: true, placeholder: 'Ex: Tesouro Selic 2029, CDB Banco X' },
+                    { id: 'classe', label: 'Classe', type: 'text', list: 'dlClassesInv', def: 'Renda Fixa', span: 2 },
+                    { id: 'saldo_inicial', label: 'Valor aplicado (R$)', type: 'number', step: '0.01', min: '0', def: 0 },
+                    { id: 'saldo_atual', label: 'Saldo atual (R$)', type: 'number', step: '0.01', min: '0', def: 0 }
+                ]
+            },
+            divida: {
+                titulo: 'dívida', rota: 'dividas', lista: () => planCache.dividas.filter(d => d.origem === 'manual'),
+                campos: [
+                    { id: 'credor', label: 'Dívida / credor *', type: 'text', span: 2, required: true, placeholder: 'Ex: Cartão Itaú, Empréstimo banco' },
+                    { id: 'tipo', label: 'Tipo', type: 'text', list: 'dlTiposDiv', def: 'Outros', span: 2 },
+                    { id: 'saldo_devedor', label: 'Saldo devedor (R$)', type: 'number', step: '0.01', min: '0', def: 0 },
+                    { id: 'taxa_juros_mes', label: 'Juros (% ao mês)', type: 'number', step: '0.01', min: '0', def: 0 },
+                    { id: 'parcela_min', label: 'Parcela (R$)', type: 'number', step: '0.01', min: '0', def: 0 },
+                    { id: 'parcelas_rest', label: 'Parcelas restantes', type: 'number', step: '1', min: '0', def: 0 }
+                ]
+            }
+        };
+
+        function abrirItemPlan(tipo, id = null) {
+            const cfg = ITENS_PLAN[tipo];
+            const item = id != null ? cfg.lista().find(x => x.id === id) : null;
+            itemPlanAtual = { tipo, id };
+            document.getElementById('itemPlanTitulo').textContent = item ? `✏️ Editar ${cfg.titulo}` : `＋ Nova ${cfg.titulo}`.replace('Nova investimento', 'Novo investimento');
+            document.getElementById('itemPlanCampos').innerHTML = cfg.campos.map(c => {
+                const v = item ? item[c.id] : (c.def ?? '');
+                return `<div class="${c.span === 2 ? 'col-span-2' : ''}">
+                    <label class="block text-xs text-slate-400 mb-1">${c.label}</label>
+                    <input id="ip-${c.id}" type="${c.type}" ${c.step ? `step="${c.step}"` : ''} ${c.min ? `min="${c.min}"` : ''} ${c.required ? 'required' : ''}
+                        ${c.list ? `list="${c.list}"` : ''} placeholder="${c.placeholder || ''}" value="${escHtml(v ?? '')}"
+                        class="w-full rounded px-3 py-1.5 text-sm ${c.type === 'number' ? 'font-mono' : ''}">
+                </div>`;
+            }).join('');
+            document.getElementById('modalItemPlan').classList.remove('hidden');
+            document.getElementById(`ip-${cfg.campos[0].id}`).focus();
+        }
+
+        function fecharItemPlan() {
+            itemPlanAtual = null;
+            document.getElementById('modalItemPlan').classList.add('hidden');
+        }
+
+        async function salvarItemPlan(e) {
+            e.preventDefault();
+            const { tipo, id } = itemPlanAtual;
+            const cfg = ITENS_PLAN[tipo];
+            const payload = {};
+            cfg.campos.forEach(c => {
+                const raw = document.getElementById(`ip-${c.id}`).value;
+                payload[c.id] = c.type === 'number' ? (c.step === '1' ? parseInt(raw || 0, 10) : parseFloat(raw || 0)) : raw;
+            });
+            const res = await fetch(`/api/${cfg.rota}${id != null ? '/' + id : ''}`, {
+                method: id != null ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            if (!res.ok) { alert('Erro ao salvar: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            fecharItemPlan();
+            await reloadAll();
+        }
+
+        async function excluirItemPlan(tipo, id) {
+            const cfg = ITENS_PLAN[tipo];
+            const item = cfg.lista().find(x => x.id === id);
+            const nome = item ? (item.nome || item.ativo || item.credor) : '';
+            if (!confirm(`Excluir ${cfg.titulo} "${nome}"?`)) return;
+            await fetch(`/api/${cfg.rota}/${id}`, { method: 'DELETE' });
             await reloadAll();
         }
 

@@ -36,6 +36,33 @@ def get_db_connection():
     return conn
 
 
+MESES_NOMES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+               "setembro", "outubro", "novembro", "dezembro"]
+
+
+def normalizar_prazo(txt: Optional[str]) -> Optional[str]:
+    """Aceita 'AAAA-MM', 'MM/AAAA' ou 'Mês/AAAA' e devolve 'AAAA-MM' (ou None se não reconhecer)."""
+    if not txt:
+        return None
+    t = txt.strip().lower().replace(" de ", "/").replace(" ", "/")
+    try:
+        if len(t) == 7 and t[4] == "-":
+            a, m = int(t[:4]), int(t[5:])
+        else:
+            parte_mes, parte_ano = t.split("/")[0], t.split("/")[-1]
+            a = int(parte_ano)
+            if parte_mes.isdigit():
+                m = int(parte_mes)
+            else:
+                m = next(i + 1 for i, n in enumerate(MESES_NOMES)
+                         if n.startswith(parte_mes[:3]) or n.replace("ç", "c").startswith(parte_mes[:3]))
+        if 1 <= m <= 12 and 1900 <= a <= 2200:
+            return f"{a:04d}-{m:02d}"
+    except (ValueError, StopIteration, IndexError):
+        pass
+    return None
+
+
 def init_db():
     """Inicializa as tabelas do banco de dados e popula categorias/configurações padrão caso estejam vazias."""
     conn = sqlite3.connect(DB_PATH)
@@ -161,6 +188,19 @@ def init_db():
             valor_atual REAL DEFAULT 0.0
         );
 
+        CREATE TABLE IF NOT EXISTS reserva_movimentos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            valor REAL NOT NULL,
+            descricao TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS app_meta (
+            chave TEXT PRIMARY KEY,
+            valor TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS reserva_config (
             id INTEGER PRIMARY KEY,
             despesa_media_manual REAL DEFAULT 0.0,
@@ -243,34 +283,38 @@ def init_db():
         ]
         cur.executemany("INSERT INTO categorias (nome, tipo, macro_categoria) VALUES (?, ?, ?)", categorias_padrao)
 
-    # Popula investimentos padrão se vazio
-    qtd_inv = cur.execute("SELECT COUNT(*) FROM investimentos").fetchone()[0]
-    if qtd_inv == 0:
-        inv_padrao = [
+    # Dados de exemplo antigos (eram inseridos automaticamente): remove uma única vez
+    # apenas as linhas que continuam idênticas ao exemplo, preservando o que o usuário alterou.
+    if not cur.execute("SELECT 1 FROM app_meta WHERE chave = 'exemplos_removidos'").fetchone():
+        exemplos_inv = [
             ("Tesouro Selic 2029", "Renda Fixa", 15000.0, 15650.0, 4.33),
             ("CDB 110% CDI Liquidez Diária", "Renda Fixa", 10000.0, 10420.0, 4.20),
             ("Fundo Imobiliário KNCR11", "FIIs", 8000.0, 8350.0, 4.38),
         ]
-        cur.executemany("INSERT INTO investimentos (ativo, classe, saldo_inicial, saldo_atual, rentabilidade_pct) VALUES (?, ?, ?, ?, ?)", inv_padrao)
-
-    # Popula dividas padrão se vazio
-    qtd_div = cur.execute("SELECT COUNT(*) FROM dividas").fetchone()[0]
-    if qtd_div == 0:
-        div_padrao = [
+        for e in exemplos_inv:
+            cur.execute("""DELETE FROM investimentos WHERE ativo = ? AND classe = ? AND saldo_inicial = ?
+                           AND saldo_atual = ? AND rentabilidade_pct = ?""", e)
+        exemplos_div = [
             ("Cartão de Crédito", "Rotativo", 1200.0, 12.5, 600.0, 2),
             ("Financiamento Veicular", "CDC", 18500.0, 1.89, 780.0, 28),
         ]
-        cur.executemany("INSERT INTO dividas (credor, tipo, saldo_devedor, taxa_juros_mes, parcela_min, parcelas_rest) VALUES (?, ?, ?, ?, ?, ?)", div_padrao)
-
-    # Popula metas padrão se vazio
-    qtd_metas = cur.execute("SELECT COUNT(*) FROM metas").fetchone()[0]
-    if qtd_metas == 0:
-        metas_padrao = [
+        for e in exemplos_div:
+            cur.execute("""DELETE FROM dividas WHERE credor = ? AND tipo = ? AND saldo_devedor = ? AND taxa_juros_mes = ?
+                           AND parcela_min = ? AND parcelas_rest = ?""", e)
+        exemplos_metas = [
             ("Viagem de Férias", "Dezembro/2026", 8000.0, 2500.0),
             ("Troca de Carro", "Julho/2027", 35000.0, 10000.0),
             ("Pós-Graduação", "Janeiro/2027", 12000.0, 4000.0),
         ]
-        cur.executemany("INSERT INTO metas (nome, prazo, valor_alvo, valor_atual) VALUES (?, ?, ?, ?)", metas_padrao)
+        for e in exemplos_metas:
+            cur.execute("DELETE FROM metas WHERE nome = ? AND prazo = ? AND valor_alvo = ? AND valor_atual = ?", e)
+        cur.execute("INSERT INTO app_meta (chave, valor) VALUES ('exemplos_removidos', ?)", (datetime.now().isoformat(),))
+
+    # Prazo das metas no formato AAAA-MM (converte textos antigos como "Dezembro/2026")
+    for row in cur.execute("SELECT id, prazo FROM metas").fetchall():
+        convertido = normalizar_prazo(row[1])
+        if convertido and convertido != row[1]:
+            cur.execute("UPDATE metas SET prazo = ? WHERE id = ?", (convertido, row[0]))
 
     conn.commit()
     conn.close()
@@ -405,33 +449,45 @@ class OrcamentoInput(BaseModel):
     valor_orcado: float = Field(..., ge=0)
 
 
-class InvestimentoUpdate(BaseModel):
-    id: int
-    saldo_inicial: float
-    saldo_atual: float
-    rentabilidade_pct: float
+class InvestimentoInput(BaseModel):
+    ativo: str = Field(..., min_length=1)
+    classe: str = Field(default="Renda Fixa")
+    saldo_inicial: float = Field(default=0.0, ge=0, description="Valor aplicado")
+    saldo_atual: float = Field(default=0.0, ge=0)
 
 
-class DividaUpdate(BaseModel):
-    id: int
-    saldo_devedor: float
-    taxa_juros_mes: float
-    parcela_min: float
-    parcelas_rest: int
+class DividaInput(BaseModel):
+    credor: str = Field(..., min_length=1)
+    tipo: str = Field(default="Outros")
+    saldo_devedor: float = Field(default=0.0, ge=0)
+    taxa_juros_mes: float = Field(default=0.0, ge=0, le=100, description="% ao mês")
+    parcela_min: float = Field(default=0.0, ge=0)
+    parcelas_rest: int = Field(default=0, ge=0, le=1000)
 
 
-class MetaUpdate(BaseModel):
-    id: int
-    valor_alvo: float
-    prazo: str
-    valor_atual: float
+class MetaInput(BaseModel):
+    nome: str = Field(..., min_length=1)
+    prazo: str = Field(..., description="AAAA-MM")
+    valor_alvo: float = Field(..., gt=0)
+    valor_atual: float = Field(default=0.0, ge=0)
+
+
+class AporteMetaInput(BaseModel):
+    valor: float = Field(..., description="Positivo para aportar, negativo para retirar")
+
+
+class ReservaMovimentoInput(BaseModel):
+    data: str = Field(..., description="YYYY-MM-DD")
+    tipo: str = Field(..., pattern="^(aporte|resgate)$")
+    valor: float = Field(..., gt=0)
+    descricao: Optional[str] = ""
 
 
 class ReservaUpdate(BaseModel):
-    despesa_media_manual: float
-    usar_media_automatica: int
-    meses_seguranca: int
-    saldo_atual_reserva: float
+    despesa_media_manual: float = Field(default=0.0, ge=0)
+    usar_media_automatica: int = Field(default=1, ge=0, le=1)
+    meses_seguranca: int = Field(default=6, ge=1, le=60)
+    saldo_atual_reserva: float = Field(default=0.0, ge=0)
 
 
 # ==========================================
@@ -2176,20 +2232,72 @@ def atualizar_orcamento(payload: OrcamentoInput):
     return {"status": "ok"}
 
 
+def _meses_ate(prazo: Optional[str], hoje: Optional[date] = None) -> Optional[int]:
+    if not prazo or len(prazo) != 7:
+        return None
+    hoje = hoje or date.today()
+    a, m = int(prazo[:4]), int(prazo[5:])
+    return (a - hoje.year) * 12 + (m - hoje.month)
+
+
+def _enriquecer_meta(m: dict) -> dict:
+    falta = max(0.0, m["valor_alvo"] - m["valor_atual"])
+    meses = _meses_ate(m["prazo"])
+    m["progresso_pct"] = round(min(100.0, m["valor_atual"] / m["valor_alvo"] * 100), 1) if m["valor_alvo"] > 0 else 0.0
+    m["falta"] = round(falta, 2)
+    m["meses_restantes"] = meses
+    m["aporte_mensal_necessario"] = round(falta / meses, 2) if meses and meses > 0 and falta > 0 else None
+    m["atingida"] = falta <= 0.005
+    m["atrasada"] = meses is not None and meses < 0 and falta > 0.005
+    return m
+
+
+def _enriquecer_investimento(i: dict) -> dict:
+    ini = i["saldo_inicial"] or 0
+    i["rendimento"] = round((i["saldo_atual"] or 0) - ini, 2)
+    i["rentabilidade_pct"] = round(((i["saldo_atual"] or 0) / ini - 1) * 100, 2) if ini > 0 else 0.0
+    return i
+
+
 @app.get("/api/planejamento")
 def obter_planejamento(ano: int = 2026, mes_inicio: int = 1):
-    """Retorna os dados consolidados de Investimentos, Dívidas, Metas e Reserva de Emergência."""
+    """
+    Dados de Investimentos, Dívidas (incluindo financiamentos cadastrados, só leitura),
+    Metas e Reserva de Emergência (configuração, meta calculada e movimentações).
+    """
     conn = get_db_connection()
-    inv = [dict(r) for r in conn.execute("SELECT * FROM investimentos ORDER BY id ASC").fetchall()]
-    div = [dict(r) for r in conn.execute("SELECT * FROM dividas ORDER BY taxa_juros_mes DESC, id ASC").fetchall()]
-    metas = [dict(r) for r in conn.execute("SELECT * FROM metas ORDER BY id ASC").fetchall()]
+    inv = [_enriquecer_investimento(dict(r)) for r in conn.execute("SELECT * FROM investimentos ORDER BY id ASC").fetchall()]
+    div = [dict(r, origem="manual") for r in conn.execute("SELECT * FROM dividas ORDER BY taxa_juros_mes DESC, id ASC").fetchall()]
+    metas = [_enriquecer_meta(dict(r)) for r in conn.execute("SELECT * FROM metas ORDER BY prazo ASC, id ASC").fetchall()]
     res_cfg = dict(conn.execute("SELECT * FROM reserva_config WHERE id = 1").fetchone())
+    movimentos = [dict(r) for r in conn.execute(
+        "SELECT * FROM reserva_movimentos ORDER BY data DESC, id DESC LIMIT 50").fetchall()]
 
-    # Calcula despesa mensal média automática dos meses com movimentação dentro da janela
+    # Financiamentos entram na lista de dívidas (somente leitura; editados na aba Financiamentos)
+    for row in conn.execute("SELECT * FROM financiamentos ORDER BY id").fetchall():
+        fin = dict(row)
+        r = resumo_financiamento(fin, _cronograma(conn, fin))
+        if r["quitado"]:
+            continue
+        prox = r["proxima_parcela"]
+        div.append({
+            "id": f"fin-{fin['id']}",
+            "financiamento_id": fin["id"],
+            "origem": "financiamento",
+            "credor": fin["nome"],
+            "tipo": f"Financiamento {fin['sistema']}/{fin['indexador']}",
+            "saldo_devedor": r["saldo_devedor_hoje"],
+            "taxa_juros_mes": round(r["taxa_mensal_pct"], 4),
+            "parcela_min": prox["prestacao"] if prox else 0.0,
+            "parcelas_rest": r["parcelas_restantes"],
+        })
+    div.sort(key=lambda d: (-d["taxa_juros_mes"], str(d["id"])))
+
+    # Despesa mensal média automática dos meses com movimentação dentro da janela
     sql_j, params_j = filtro_janela(janela_meses(ano, mes_inicio))
     row_media = conn.execute(
         f"""
-        SELECT AVG(total_mes) as media FROM (
+        SELECT AVG(total_mes) as media, COUNT(*) as meses FROM (
             SELECT ano, mes, SUM(valor) as total_mes
             FROM lancamentos
             WHERE {sql_j} AND tipo = 'Despesa'
@@ -2201,59 +2309,195 @@ def obter_planejamento(ano: int = 2026, mes_inicio: int = 1):
     despesa_media_auto = round(row_media["media"] or 0.0, 2)
     despesa_base = despesa_media_auto if res_cfg["usar_media_automatica"] else res_cfg["despesa_media_manual"]
     meta_reserva = round(despesa_base * res_cfg["meses_seguranca"], 2)
-
     conn.close()
+
+    total_inv = sum(i["saldo_atual"] for i in inv)
+    total_aplicado = sum(i["saldo_inicial"] for i in inv)
     return {
         "investimentos": inv,
+        "totais_investimentos": {
+            "aplicado": round(total_aplicado, 2),
+            "atual": round(total_inv, 2),
+            "rendimento": round(total_inv - total_aplicado, 2),
+            "rentabilidade_pct": round((total_inv / total_aplicado - 1) * 100, 2) if total_aplicado > 0 else 0.0,
+        },
         "dividas": div,
+        "totais_dividas": {
+            "saldo": round(sum(d["saldo_devedor"] for d in div), 2),
+            "parcelas_mes": round(sum(d["parcela_min"] for d in div), 2),
+        },
         "metas": metas,
         "reserva": {
             **res_cfg,
             "despesa_media_calculada": despesa_media_auto,
+            "meses_com_despesa": row_media["meses"] or 0,
+            "despesa_base": round(despesa_base, 2),
             "meta_total_reserva": meta_reserva,
+            "falta": round(max(0.0, meta_reserva - res_cfg["saldo_atual_reserva"]), 2),
+            "meses_cobertos": round(res_cfg["saldo_atual_reserva"] / despesa_base, 1) if despesa_base > 0 else None,
             "progresso_pct": round((res_cfg["saldo_atual_reserva"] / meta_reserva) * 100, 1) if meta_reserva > 0 else 0.0,
+            "movimentos": movimentos,
         },
     }
 
 
+# ---------- Investimentos ----------
+def _nome_obrigatorio(txt: str, oque: str) -> str:
+    t = (txt or "").strip()
+    if not t:
+        raise HTTPException(status_code=400, detail=f"Informe o {oque}.")
+    return t
+
+
 @app.post("/api/investimentos")
-def salvar_investimento(payload: InvestimentoUpdate):
+def criar_investimento(payload: InvestimentoInput):
+    ativo = _nome_obrigatorio(payload.ativo, "nome do ativo")
     conn = get_db_connection()
-    conn.execute(
-        "UPDATE investimentos SET saldo_inicial = ?, saldo_atual = ?, rentabilidade_pct = ? WHERE id = ?",
-        (payload.saldo_inicial, payload.saldo_atual, payload.rentabilidade_pct, payload.id),
+    cur = conn.execute(
+        "INSERT INTO investimentos (ativo, classe, saldo_inicial, saldo_atual, rentabilidade_pct) VALUES (?, ?, ?, ?, ?)",
+        (ativo, payload.classe.strip() or "Outros", round(payload.saldo_inicial, 2), round(payload.saldo_atual, 2),
+         _enriquecer_investimento(dict(saldo_inicial=payload.saldo_inicial, saldo_atual=payload.saldo_atual))["rentabilidade_pct"]),
+    )
+    conn.commit()
+    novo = cur.lastrowid
+    conn.close()
+    return {"status": "ok", "id": novo}
+
+
+@app.put("/api/investimentos/{inv_id}")
+def atualizar_investimento(inv_id: int, payload: InvestimentoInput):
+    ativo = _nome_obrigatorio(payload.ativo, "nome do ativo")
+    conn = get_db_connection()
+    cur = conn.execute(
+        "UPDATE investimentos SET ativo = ?, classe = ?, saldo_inicial = ?, saldo_atual = ?, rentabilidade_pct = ? WHERE id = ?",
+        (ativo, payload.classe.strip() or "Outros", round(payload.saldo_inicial, 2), round(payload.saldo_atual, 2),
+         _enriquecer_investimento(dict(saldo_inicial=payload.saldo_inicial, saldo_atual=payload.saldo_atual))["rentabilidade_pct"],
+         inv_id),
     )
     conn.commit()
     conn.close()
-    return {"status": "ok"}
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Investimento não encontrado.")
+    return {"status": "ok", "id": inv_id}
 
 
+@app.delete("/api/investimentos/{inv_id}")
+def excluir_investimento(inv_id: int):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM investimentos WHERE id = ?", (inv_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": inv_id}
+
+
+# ---------- Dívidas ----------
 @app.post("/api/dividas")
-def salvar_divida(payload: DividaUpdate):
+def criar_divida(payload: DividaInput):
+    credor = _nome_obrigatorio(payload.credor, "credor / nome da dívida")
     conn = get_db_connection()
-    conn.execute(
-        "UPDATE dividas SET saldo_devedor = ?, taxa_juros_mes = ?, parcela_min = ?, parcelas_rest = ? WHERE id = ?",
-        (payload.saldo_devedor, payload.taxa_juros_mes, payload.parcela_min, payload.parcelas_rest, payload.id),
+    cur = conn.execute(
+        "INSERT INTO dividas (credor, tipo, saldo_devedor, taxa_juros_mes, parcela_min, parcelas_rest) VALUES (?, ?, ?, ?, ?, ?)",
+        (credor, payload.tipo.strip() or "Outros", round(payload.saldo_devedor, 2), payload.taxa_juros_mes,
+         round(payload.parcela_min, 2), payload.parcelas_rest),
+    )
+    conn.commit()
+    novo = cur.lastrowid
+    conn.close()
+    return {"status": "ok", "id": novo}
+
+
+@app.put("/api/dividas/{div_id}")
+def atualizar_divida(div_id: int, payload: DividaInput):
+    credor = _nome_obrigatorio(payload.credor, "credor / nome da dívida")
+    conn = get_db_connection()
+    cur = conn.execute(
+        """UPDATE dividas SET credor = ?, tipo = ?, saldo_devedor = ?, taxa_juros_mes = ?, parcela_min = ?,
+           parcelas_rest = ? WHERE id = ?""",
+        (credor, payload.tipo.strip() or "Outros", round(payload.saldo_devedor, 2), payload.taxa_juros_mes,
+         round(payload.parcela_min, 2), payload.parcelas_rest, div_id),
     )
     conn.commit()
     conn.close()
-    return {"status": "ok"}
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Dívida não encontrada.")
+    return {"status": "ok", "id": div_id}
+
+
+@app.delete("/api/dividas/{div_id}")
+def excluir_divida(div_id: int):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM dividas WHERE id = ?", (div_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": div_id}
+
+
+# ---------- Metas ----------
+def _validar_meta(payload: MetaInput) -> tuple:
+    nome = _nome_obrigatorio(payload.nome, "nome da meta")
+    prazo = normalizar_prazo(payload.prazo)
+    if not prazo:
+        raise HTTPException(status_code=400, detail="Prazo inválido. Use o formato AAAA-MM.")
+    return nome, prazo
 
 
 @app.post("/api/metas")
-def salvar_meta(payload: MetaUpdate):
+def criar_meta(payload: MetaInput):
+    nome, prazo = _validar_meta(payload)
     conn = get_db_connection()
-    conn.execute(
-        "UPDATE metas SET valor_alvo = ?, prazo = ?, valor_atual = ? WHERE id = ?",
-        (payload.valor_alvo, payload.prazo, payload.valor_atual, payload.id),
-    )
+    cur = conn.execute("INSERT INTO metas (nome, prazo, valor_alvo, valor_atual) VALUES (?, ?, ?, ?)",
+                       (nome, prazo, round(payload.valor_alvo, 2), round(payload.valor_atual, 2)))
+    conn.commit()
+    novo = cur.lastrowid
+    conn.close()
+    return {"status": "ok", "id": novo}
+
+
+@app.put("/api/metas/{meta_id}")
+def atualizar_meta(meta_id: int, payload: MetaInput):
+    nome, prazo = _validar_meta(payload)
+    conn = get_db_connection()
+    cur = conn.execute("UPDATE metas SET nome = ?, prazo = ?, valor_alvo = ?, valor_atual = ? WHERE id = ?",
+                       (nome, prazo, round(payload.valor_alvo, 2), round(payload.valor_atual, 2), meta_id))
     conn.commit()
     conn.close()
-    return {"status": "ok"}
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Meta não encontrada.")
+    return {"status": "ok", "id": meta_id}
 
 
+@app.post("/api/metas/{meta_id}/aporte")
+def aportar_meta(meta_id: int, payload: AporteMetaInput):
+    """Soma (ou retira, se negativo) um valor ao acumulado da meta."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT valor_atual FROM metas WHERE id = ?", (meta_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Meta não encontrada.")
+    novo = round(row["valor_atual"] + payload.valor, 2)
+    if novo < 0:
+        conn.close()
+        raise HTTPException(status_code=400, detail="A retirada é maior que o valor acumulado na meta.")
+    conn.execute("UPDATE metas SET valor_atual = ? WHERE id = ?", (novo, meta_id))
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "valor_atual": novo}
+
+
+@app.delete("/api/metas/{meta_id}")
+def excluir_meta(meta_id: int):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM metas WHERE id = ?", (meta_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": meta_id}
+
+
+# ---------- Reserva de Emergência ----------
+@app.put("/api/reserva")
 @app.post("/api/reserva")
 def salvar_reserva(payload: ReservaUpdate):
+    """Configuração da reserva: meses de segurança, base (média automática ou valor manual) e saldo atual."""
     conn = get_db_connection()
     conn.execute(
         """
@@ -2261,8 +2505,48 @@ def salvar_reserva(payload: ReservaUpdate):
         SET despesa_media_manual = ?, usar_media_automatica = ?, meses_seguranca = ?, saldo_atual_reserva = ?
         WHERE id = 1
         """,
-        (payload.despesa_media_manual, payload.usar_media_automatica, payload.meses_seguranca, payload.saldo_atual_reserva),
+        (round(payload.despesa_media_manual, 2), payload.usar_media_automatica, payload.meses_seguranca,
+         round(payload.saldo_atual_reserva, 2)),
     )
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+@app.post("/api/reserva/movimentos")
+def lancar_movimento_reserva(payload: ReservaMovimentoInput):
+    """Registra um aporte ou resgate da reserva e atualiza o saldo."""
+    try:
+        datetime.strptime(payload.data, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Data inválida. Use YYYY-MM-DD.")
+    conn = get_db_connection()
+    saldo = conn.execute("SELECT saldo_atual_reserva FROM reserva_config WHERE id = 1").fetchone()[0]
+    delta = payload.valor if payload.tipo == "aporte" else -payload.valor
+    if saldo + delta < -0.005:
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"Resgate maior que o saldo da reserva (R$ {fmt_brl(saldo)}).")
+    cur = conn.execute("INSERT INTO reserva_movimentos (data, tipo, valor, descricao) VALUES (?, ?, ?, ?)",
+                       (payload.data, payload.tipo, round(payload.valor, 2), (payload.descricao or "").strip()))
+    conn.execute("UPDATE reserva_config SET saldo_atual_reserva = ? WHERE id = 1", (round(saldo + delta, 2),))
+    conn.commit()
+    novo = cur.lastrowid
+    conn.close()
+    return {"status": "ok", "id": novo, "saldo": round(saldo + delta, 2)}
+
+
+@app.delete("/api/reserva/movimentos/{mov_id}")
+def excluir_movimento_reserva(mov_id: int):
+    """Desfaz um aporte/resgate (estorna o efeito no saldo)."""
+    conn = get_db_connection()
+    mov = conn.execute("SELECT * FROM reserva_movimentos WHERE id = ?", (mov_id,)).fetchone()
+    if not mov:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Movimentação não encontrada.")
+    saldo = conn.execute("SELECT saldo_atual_reserva FROM reserva_config WHERE id = 1").fetchone()[0]
+    delta = -mov["valor"] if mov["tipo"] == "aporte" else mov["valor"]
+    conn.execute("UPDATE reserva_config SET saldo_atual_reserva = ? WHERE id = 1", (round(max(0.0, saldo + delta), 2),))
+    conn.execute("DELETE FROM reserva_movimentos WHERE id = ?", (mov_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted", "id": mov_id}
