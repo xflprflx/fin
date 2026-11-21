@@ -449,6 +449,21 @@ class OrcamentoInput(BaseModel):
     valor_orcado: float = Field(..., ge=0)
 
 
+class OrcamentoLoteInput(BaseModel):
+    macros: List[str] = Field(..., min_length=1)
+    de: str = Field(..., description="AAAA-MM (inclusive)")
+    ate: str = Field(..., description="AAAA-MM (inclusive)")
+    valor_orcado: float = Field(..., ge=0)
+    sobrescrever: bool = Field(default=True, description="False = só preenche meses ainda sem orçamento")
+
+
+class OrcamentoCopiaInput(BaseModel):
+    origem: str = Field(..., description="AAAA-MM de onde copiar todas as macro-categorias")
+    de: str
+    ate: str
+    sobrescrever: bool = True
+
+
 class InvestimentoInput(BaseModel):
     ativo: str = Field(..., min_length=1)
     classe: str = Field(default="Renda Fixa")
@@ -2286,10 +2301,7 @@ def obter_orcamento(ano: int = 2026, mes_inicio: int = 1):
     posicoes = range(1, 13)
     conn = get_db_connection()
 
-    macros = [
-        "Moradia", "Alimentação", "Transporte", "Saúde", "Educação",
-        "Lazer", "Vestuário", "Pessoal", "Financeiro", "Poupança/Investimentos", "Outros"
-    ]
+    macros = _macros_despesa(conn)
 
     sql_j, params_j = filtro_janela(periodos)
     rows_orc = conn.execute(
@@ -2330,6 +2342,91 @@ def obter_orcamento(ano: int = 2026, mes_inicio: int = 1):
         })
 
     return {"periodos": periodos, "linhas": resultado}
+
+
+MACROS_DESPESA_PADRAO = [
+    "Moradia", "Alimentação", "Transporte", "Saúde", "Educação",
+    "Lazer", "Vestuário", "Pessoal", "Financeiro", "Poupança/Investimentos", "Outros"
+]
+
+
+def _macros_despesa(conn) -> List[str]:
+    """Macros padrão + as criadas pelo usuário em categorias de despesa + as que já têm orçamento."""
+    extras = [r[0] for r in conn.execute(
+        """SELECT DISTINCT macro_categoria FROM categorias WHERE tipo = 'Despesa'
+           UNION SELECT DISTINCT macro_categoria FROM orcamento""").fetchall() if r[0]]
+    macros = list(MACROS_DESPESA_PADRAO)
+    for m in sorted(set(extras) - set(macros), key=str.lower):
+        macros.insert(len(macros) - 1, m)  # antes de "Outros"
+    return macros
+
+
+def _intervalo_meses(de: str, ate: str) -> List[tuple]:
+    try:
+        a1, m1 = (int(x) for x in de.split("-"))
+        a2, m2 = (int(x) for x in ate.split("-"))
+        if not (1 <= m1 <= 12 and 1 <= m2 <= 12):
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Meses devem estar no formato AAAA-MM.")
+    ini, fim = a1 * 12 + m1 - 1, a2 * 12 + m2 - 1
+    if fim < ini:
+        raise HTTPException(status_code=400, detail="O mês final deve ser igual ou posterior ao inicial.")
+    if fim - ini >= 120:
+        raise HTTPException(status_code=400, detail="Intervalo máximo de 120 meses.")
+    return [(t // 12, t % 12 + 1) for t in range(ini, fim + 1)]
+
+
+def _gravar_orcamento(conn, macro: str, ano: int, mes: int, valor: float, sobrescrever: bool) -> bool:
+    if not sobrescrever:
+        existe = conn.execute("SELECT valor_orcado FROM orcamento WHERE macro_categoria = ? AND ano = ? AND mes = ?",
+                              (macro, ano, mes)).fetchone()
+        if existe and (existe[0] or 0) > 0:
+            return False
+    conn.execute(
+        """INSERT INTO orcamento (macro_categoria, ano, mes, valor_orcado) VALUES (?, ?, ?, ?)
+           ON CONFLICT(macro_categoria, ano, mes) DO UPDATE SET valor_orcado = excluded.valor_orcado""",
+        (macro, ano, mes, round(valor, 2)),
+    )
+    return True
+
+
+@app.post("/api/orcamento/lote")
+def orcamento_em_lote(payload: OrcamentoLoteInput):
+    """Define o mesmo valor orçado para uma ou várias macro-categorias em todos os meses de um intervalo."""
+    meses = _intervalo_meses(payload.de, payload.ate)
+    macros = [m.strip() for m in payload.macros if m.strip()]
+    if not macros:
+        raise HTTPException(status_code=400, detail="Escolha ao menos uma macro-categoria.")
+    conn = get_db_connection()
+    gravados = sum(_gravar_orcamento(conn, mac, a, m, payload.valor_orcado, payload.sobrescrever)
+                   for mac in macros for a, m in meses)
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "gravados": gravados, "ignorados": len(macros) * len(meses) - gravados,
+            "meses": len(meses), "macros": len(macros)}
+
+
+@app.post("/api/orcamento/copiar")
+def copiar_orcamento(payload: OrcamentoCopiaInput):
+    """Copia o orçamento de todas as macro-categorias de um mês para cada mês de um intervalo."""
+    try:
+        oa, om = (int(x) for x in payload.origem.split("-"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Mês de origem deve estar no formato AAAA-MM.")
+    meses = [(a, m) for a, m in _intervalo_meses(payload.de, payload.ate) if (a, m) != (oa, om)]
+    conn = get_db_connection()
+    origem = conn.execute("SELECT macro_categoria, valor_orcado FROM orcamento WHERE ano = ? AND mes = ? AND valor_orcado > 0",
+                          (oa, om)).fetchall()
+    if not origem:
+        conn.close()
+        raise HTTPException(status_code=400, detail="O mês de origem não tem orçamento para copiar.")
+    gravados = sum(_gravar_orcamento(conn, r["macro_categoria"], a, m, r["valor_orcado"], payload.sobrescrever)
+                   for r in origem for a, m in meses)
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "gravados": gravados, "ignorados": len(origem) * len(meses) - gravados,
+            "meses": len(meses), "macros": len(origem)}
 
 
 @app.post("/api/orcamento")

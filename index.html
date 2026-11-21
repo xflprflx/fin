@@ -772,12 +772,62 @@
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
                 <div>
                     <h2 class="text-sm font-semibold text-white">📋 Planejamento Orçamentário vs Realizado</h2>
-                    <p class="text-xs text-slate-400">Edite qualquer meta mensal clicando diretamente no valor orçado ou usando o seletor rápido abaixo.</p>
+                    <p class="text-xs text-slate-400">Edite o orçado de um mês na tabela, na matriz de 12 meses, ou lance para vários meses de uma vez.</p>
                 </div>
                 <div class="flex items-center gap-2">
                     <label class="text-xs text-slate-400">Visualizar Mês em Detalhe:</label>
                     <select id="orcMesSelect" onchange="renderizarOrcamento()" class="rounded px-2.5 py-1 text-sm font-semibold"></select>
                 </div>
+            </div>
+
+            <!-- Orçar vários meses -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="text-sm font-semibold text-sky-400">🗓 Orçar vários meses</h3>
+                    <div class="flex gap-1 text-xs">
+                        <button type="button" id="btnModoLote" onclick="modoLoteOrcamento('valor')" class="px-3 py-1 rounded border">Definir valor</button>
+                        <button type="button" id="btnModoCopia" onclick="modoLoteOrcamento('copia')" class="px-3 py-1 rounded border">Copiar um mês</button>
+                    </div>
+                </div>
+                <form id="formOrcLote" onsubmit="aplicarOrcamentoLote(event)" class="space-y-3">
+                    <div id="boxLoteValor" class="space-y-2">
+                        <div class="flex flex-wrap items-center gap-2 text-xs">
+                            <span class="text-slate-400">Macro-categorias:</span>
+                            <button type="button" onclick="marcarMacrosLote(true)" class="text-sky-400 hover:underline">todas</button>
+                            <button type="button" onclick="marcarMacrosLote(false)" class="text-sky-400 hover:underline">nenhuma</button>
+                        </div>
+                        <div id="orcLoteMacros" class="flex flex-wrap gap-1.5"></div>
+                    </div>
+                    <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+                        <div id="boxLoteValorInput">
+                            <label class="block text-xs text-slate-400 mb-1">Valor por mês (R$) *</label>
+                            <input type="number" id="orcLoteValor" min="0" step="0.01" placeholder="0.00" oninput="previaOrcamentoLote()" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                        </div>
+                        <div id="boxLoteOrigem" class="hidden">
+                            <label class="block text-xs text-slate-400 mb-1">Copiar o orçamento de *</label>
+                            <input type="month" id="orcLoteOrigem" oninput="previaOrcamentoLote()" class="w-full rounded px-3 py-1.5 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">De *</label>
+                            <input type="month" id="orcLoteDe" required oninput="previaOrcamentoLote()" class="w-full rounded px-3 py-1.5 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">Até *</label>
+                            <input type="month" id="orcLoteAte" required oninput="previaOrcamentoLote()" class="w-full rounded px-3 py-1.5 text-sm">
+                        </div>
+                        <div class="col-span-2 flex flex-wrap gap-1 text-[11px]">
+                            <button type="button" onclick="presetLoteOrcamento('janela')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Período exibido</button>
+                            <button type="button" onclick="presetLoteOrcamento('do_mes')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Do mês selecionado em diante</button>
+                            <button type="button" onclick="presetLoteOrcamento('ate_dez')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Até dezembro</button>
+                            <button type="button" onclick="presetLoteOrcamento('12m')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Próximos 12 meses</button>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <label class="flex items-center gap-2 text-xs text-slate-400 cursor-pointer"><input type="checkbox" id="orcLoteSoVazios" onchange="previaOrcamentoLote()"> Só meses sem orçamento</label>
+                            <button type="submit" class="w-full bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm">✓ Aplicar</button>
+                        </div>
+                    </div>
+                    <div id="orcLotePrevia" class="text-xs text-slate-400"></div>
+                </form>
             </div>
 
             <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
@@ -795,6 +845,26 @@
                             </tr>
                         </thead>
                         <tbody id="tbody-orcamento" class="divide-y divide-slate-800 text-right"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Matriz de 12 meses (orçado editável x realizado) -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-800 flex flex-wrap gap-2 justify-between items-center">
+                    <h3 class="text-sm font-semibold text-white">📅 Orçado mês a mês (12 meses)</h3>
+                    <span class="text-xs text-slate-400">Digite para alterar • abaixo de cada valor: realizado (vermelho = acima do orçado)</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse table-compact">
+                        <thead>
+                            <tr class="bg-slate-800 text-slate-300 text-right">
+                                <th class="text-left">Macro-Categoria</th>
+                                <th data-meses-janela class="hidden"></th>
+                                <th class="bg-slate-700 text-white">TOTAL</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbody-orc-matriz" class="divide-y divide-slate-800 text-right"></tbody>
                     </table>
                 </div>
             </div>
@@ -3391,6 +3461,8 @@
             const data = await res.json();
             orcamentoCache = data.linhas;
             renderizarOrcamento();
+            renderizarMatrizOrcamento();
+            popularMacrosLote();
         }
 
         function renderizarOrcamento() {
@@ -3399,7 +3471,7 @@
 
             limparCelulas('orc');
             const pSel = periodosAtuais[mes - 1];
-            tbody.innerHTML = orcamentoCache.map(row => {
+            tbody.innerHTML = orcamentoCache.map((row, idxRow) => {
                 const orcMes = row.orcado[mes] || 0;
                 const celMes = registrarCelula('orc', {
                     titulo: `Despesas de ${row.macro_categoria} — ${MESES_NOME[pSel.mes - 1]}/${pSel.ano}`,
@@ -3419,7 +3491,7 @@
                     <td class="text-left font-semibold text-white">${row.macro_categoria}</td>
                     <td>
                         <input type="number" step="10" value="${orcMes}"
-                            onchange="salvarValorOrcado('${row.macro_categoria}', ${mes}, this.value)"
+                            onchange="salvarValorOrcado(orcamentoCache[${idxRow}].macro_categoria, ${mes}, this.value)"
                             class="w-28 text-right rounded px-2 py-1 text-xs font-mono">
                     </td>
                     <td class="font-mono text-slate-200 ${CLS_CELULA}" onclick="abrirCelula(${celMes})">${fmtBRL(realMes)}</td>
@@ -3429,6 +3501,150 @@
                     <td class="font-mono font-semibold ${row.variacao_anual > 0 ? 'text-rose-400' : 'text-emerald-400'} ${CLS_CELULA}" onclick="abrirCelula(${celTot})">${fmtBRL(row.variacao_anual)}</td>
                 </tr>`;
             }).join('');
+        }
+
+        // ---------- Matriz 12 meses ----------
+        function renderizarMatrizOrcamento() {
+            const tbody = document.getElementById('tbody-orc-matriz');
+            limparCelulas('orcm');
+            const totOrc = Array(12).fill(0), totReal = Array(12).fill(0);
+            const linhas = orcamentoCache.map((row, idxRow) => {
+                let cols = '';
+                for (let i = 1; i <= 12; i++) {
+                    const o = row.orcado[i] || 0, r = row.realizado[i] || 0;
+                    totOrc[i - 1] += o; totReal[i - 1] += r;
+                    const p = periodosAtuais[i - 1];
+                    const cel = registrarCelula('orcm', {
+                        titulo: `Despesas de ${row.macro_categoria} — ${MESES_NOME[p.mes - 1]}/${p.ano}`,
+                        subtitulo: `Orçado no mês: ${fmtBRL(o)}`,
+                        filtros: { tipo: 'Despesa', macro: row.macro_categoria, periodo: p.chave }
+                    });
+                    const cor = r === 0 ? 'text-slate-600' : o > 0 && r > o ? 'text-rose-400' : o > 0 ? 'text-emerald-400' : 'text-slate-400';
+                    cols += `<td class="align-top">
+                        <input type="number" min="0" step="10" value="${o || ''}" placeholder="0"
+                            onchange="salvarValorOrcado(orcamentoCache[${idxRow}].macro_categoria, ${i}, this.value)"
+                            class="w-20 text-right rounded px-1.5 py-0.5 text-xs font-mono">
+                        <div class="text-[10px] font-mono ${cor} ${CLS_CELULA}" onclick="abrirCelula(${cel})" title="Realizado — clique para ver os lançamentos">${r ? fmtNum(r) : '—'}</div>
+                    </td>`;
+                }
+                return `<tr class="hover:bg-slate-800/30"><td class="text-left font-medium text-white align-top">${escHtml(row.macro_categoria)}</td>${cols}
+                    <td class="bg-slate-800/50 align-top"><div class="font-mono font-semibold text-white">${fmtNum(row.total_orcado)}</div>
+                        <div class="text-[10px] font-mono ${row.total_realizado > row.total_orcado && row.total_orcado > 0 ? 'text-rose-400' : 'text-slate-400'}">${fmtNum(row.total_realizado)}</div></td></tr>`;
+            });
+            const somaO = totOrc.reduce((a, b) => a + b, 0), somaR = totReal.reduce((a, b) => a + b, 0);
+            linhas.push(`<tr class="bg-slate-800/40 font-semibold"><td class="text-left text-slate-300">Total</td>${totOrc.map((o, i) =>
+                `<td><div class="font-mono text-white">${fmtNum(o)}</div><div class="text-[10px] font-mono ${o > 0 && totReal[i] > o ? 'text-rose-400' : 'text-slate-400'}">${fmtNum(totReal[i])}</div></td>`).join('')}
+                <td class="bg-slate-800"><div class="font-mono text-white">${fmtNum(somaO)}</div><div class="text-[10px] font-mono text-slate-400">${fmtNum(somaR)}</div></td></tr>`);
+            tbody.innerHTML = linhas.join('');
+        }
+
+        // ---------- Orçar vários meses ----------
+        let modoLote = 'valor';
+        let _loteIniciado = false;
+        let _loteJanela = null;
+        const chaveMes = (a, m) => `${a}-${String(m).padStart(2, '0')}`;
+
+        function modoLoteOrcamento(modo) {
+            modoLote = modo;
+            const ativo = 'bg-sky-500 text-slate-950 border-sky-400 font-semibold', inativo = 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700';
+            document.getElementById('btnModoLote').className = `px-3 py-1 rounded border ${modo === 'valor' ? ativo : inativo}`;
+            document.getElementById('btnModoCopia').className = `px-3 py-1 rounded border ${modo === 'copia' ? ativo : inativo}`;
+            document.getElementById('boxLoteValor').classList.toggle('hidden', modo !== 'valor');
+            document.getElementById('boxLoteValorInput').classList.toggle('hidden', modo !== 'valor');
+            document.getElementById('boxLoteOrigem').classList.toggle('hidden', modo !== 'copia');
+            document.getElementById('orcLoteValor').required = modo === 'valor';
+            document.getElementById('orcLoteOrigem').required = modo === 'copia';
+            if (modo === 'copia' && !document.getElementById('orcLoteOrigem').value) {
+                const pos = parseInt(document.getElementById('orcMesSelect').value, 10) || 1;
+                document.getElementById('orcLoteOrigem').value = periodosAtuais[pos - 1].chave;
+            }
+            previaOrcamentoLote();
+        }
+
+        function popularMacrosLote() {
+            const box = document.getElementById('orcLoteMacros');
+            const marcadas = new Set([...box.querySelectorAll('input:checked')].map(i => i.value));
+            box.innerHTML = orcamentoCache.map(r => `<label class="flex items-center gap-1.5 px-2 py-1 rounded border border-slate-700 bg-slate-800/60 text-xs cursor-pointer">
+                <input type="checkbox" value="${escHtml(r.macro_categoria)}" ${marcadas.has(r.macro_categoria) ? 'checked' : ''} onchange="previaOrcamentoLote()"> ${escHtml(r.macro_categoria)}</label>`).join('');
+            // Intervalo padrão = período exibido; acompanha quando a linha do tempo muda
+            const de = document.getElementById('orcLoteDe'), ate = document.getElementById('orcLoteAte');
+            const janela = `${periodosAtuais[0].chave}|${periodosAtuais[11].chave}`;
+            if (_loteJanela !== janela) {
+                _loteJanela = janela;
+                de.value = periodosAtuais[0].chave;
+                ate.value = periodosAtuais[11].chave;
+                if (!document.getElementById('orcLoteOrigem').value || modoLote === 'valor') document.getElementById('orcLoteOrigem').value = '';
+            }
+            if (!_loteIniciado) { _loteIniciado = true; modoLoteOrcamento('valor'); } else previaOrcamentoLote();
+        }
+
+        function marcarMacrosLote(v) {
+            document.querySelectorAll('#orcLoteMacros input').forEach(i => i.checked = v);
+            previaOrcamentoLote();
+        }
+
+        function presetLoteOrcamento(tipo) {
+            const de = document.getElementById('orcLoteDe'), ate = document.getElementById('orcLoteAte');
+            const d = new Date();
+            const pos = parseInt(document.getElementById('orcMesSelect').value, 10) || 1;
+            if (tipo === 'janela') { de.value = periodosAtuais[0].chave; ate.value = periodosAtuais[11].chave; }
+            if (tipo === 'do_mes') { de.value = periodosAtuais[pos - 1].chave; ate.value = periodosAtuais[11].chave; }
+            if (tipo === 'ate_dez') { const p = periodosAtuais[pos - 1]; de.value = p.chave; ate.value = chaveMes(p.ano, 12); }
+            if (tipo === '12m') {
+                de.value = chaveMes(d.getFullYear(), d.getMonth() + 1);
+                const t = d.getFullYear() * 12 + d.getMonth() + 11;
+                ate.value = chaveMes(Math.floor(t / 12), (t % 12) + 1);
+            }
+            previaOrcamentoLote();
+        }
+
+        function mesesNoIntervalo(de, ate) {
+            if (!de || !ate) return 0;
+            const [a1, m1] = de.split('-').map(Number), [a2, m2] = ate.split('-').map(Number);
+            return (a2 * 12 + m2) - (a1 * 12 + m1) + 1;
+        }
+
+        function previaOrcamentoLote() {
+            const el = document.getElementById('orcLotePrevia');
+            const de = document.getElementById('orcLoteDe').value, ate = document.getElementById('orcLoteAte').value;
+            const n = mesesNoIntervalo(de, ate);
+            if (n <= 0) { el.innerHTML = '<span class="text-rose-400">O mês final deve ser igual ou posterior ao inicial.</span>'; return; }
+            const soVazios = document.getElementById('orcLoteSoVazios').checked;
+            const intervalo = `${fmtMesAno(de)} a ${fmtMesAno(ate)} (${n} ${n === 1 ? 'mês' : 'meses'})`;
+            if (modoLote === 'valor') {
+                const macros = [...document.querySelectorAll('#orcLoteMacros input:checked')].map(i => i.value);
+                const v = parseFloat(document.getElementById('orcLoteValor').value || 0);
+                el.innerHTML = macros.length
+                    ? `Define <strong class="text-white">${fmtBRL(v)}/mês</strong> para <strong class="text-white">${macros.join(', ')}</strong> de ${intervalo}`
+                      + ` — total <strong class="text-white">${fmtBRL(v * n * macros.length)}</strong>${soVazios ? ', sem alterar meses que já têm orçamento' : ''}.`
+                    : 'Marque ao menos uma macro-categoria.';
+            } else {
+                const origem = document.getElementById('orcLoteOrigem').value;
+                el.innerHTML = origem ? `Copia todos os valores orçados de <strong class="text-white">${fmtMesAno(origem)}</strong> para ${intervalo}${soVazios ? ', sem alterar meses que já têm orçamento' : ''}.` : '';
+            }
+        }
+
+        async function aplicarOrcamentoLote(e) {
+            e.preventDefault();
+            const de = document.getElementById('orcLoteDe').value, ate = document.getElementById('orcLoteAte').value;
+            const sobrescrever = !document.getElementById('orcLoteSoVazios').checked;
+            let url, payload;
+            if (modoLote === 'valor') {
+                const macros = [...document.querySelectorAll('#orcLoteMacros input:checked')].map(i => i.value);
+                if (!macros.length) { alert('Marque ao menos uma macro-categoria.'); return; }
+                url = '/api/orcamento/lote';
+                payload = { macros, de, ate, valor_orcado: parseFloat(document.getElementById('orcLoteValor').value || 0), sobrescrever };
+            } else {
+                url = '/api/orcamento/copiar';
+                payload = { origem: document.getElementById('orcLoteOrigem').value, de, ate, sobrescrever };
+            }
+            const n = mesesNoIntervalo(de, ate);
+            if (sobrescrever && n > 1 && !confirm(`Isso vai substituir o orçado existente em ${n} meses. Continuar?`)) return;
+            const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (!res.ok) { alert('Erro: ' + msgErro(await res.json().catch(() => ({})))); return; }
+            const out = await res.json();
+            await reloadAll();
+            document.getElementById('orcLotePrevia').innerHTML = `<span class="text-emerald-400">✓ ${out.gravados} valor(es) gravado(s)${out.ignorados ? ` • ${out.ignorados} mantido(s) porque já tinham orçamento` : ''}.</span>`;
         }
 
         async function salvarValorOrcado(macro, pos, valor) {
