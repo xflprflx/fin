@@ -68,32 +68,45 @@
              ABA 1: DASHBOARD ANUAL
              ========================================== -->
         <section id="view-dashboard" class="space-y-6">
+            <!-- Seletor do período dos indicadores -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-2">
+                <span class="text-xs text-slate-400 mr-1">Indicadores de:</span>
+                <button type="button" onclick="deslocarMesDashboard(-1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Mês anterior">◀</button>
+                <div id="dashMesesChips" class="flex flex-wrap gap-1"></div>
+                <button type="button" onclick="deslocarMesDashboard(1)" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Próximo mês">▶</button>
+            </div>
+
             <!-- KPI Cards -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+                <div onclick="switchTab('fluxo'); fluxoHoje();" class="bg-slate-900 border border-sky-500/40 rounded-xl p-4 cursor-pointer hover:border-sky-400 transition" title="Abrir o fluxo diário">
+                    <span id="kpi-hoje-lbl" class="text-xs uppercase text-slate-400 font-semibold">Saldo hoje</span>
+                    <div id="kpi-hoje" class="text-2xl font-bold text-sky-300 mt-1">R$ 0,00</div>
+                    <div id="kpi-hoje-sub" class="text-xs text-slate-500"></div>
+                </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <span class="text-xs uppercase text-slate-400 font-semibold">Receita (12 meses)</span>
+                    <span id="kpi-receita-lbl" class="text-xs uppercase text-slate-400 font-semibold">Receita</span>
                     <div id="kpi-receita" class="text-2xl font-bold text-emerald-400 mt-1">R$ 0,00</div>
-                    <span class="text-xs text-slate-500">Acumulado no período</span>
+                    <span id="kpi-receita-sub" class="text-xs text-slate-500"></span>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <span class="text-xs uppercase text-slate-400 font-semibold">Despesa (12 meses)</span>
+                    <span id="kpi-despesa-lbl" class="text-xs uppercase text-slate-400 font-semibold">Despesa</span>
                     <div id="kpi-despesa" class="text-2xl font-bold text-rose-400 mt-1">R$ 0,00</div>
-                    <span class="text-xs text-slate-500">Saídas totais</span>
+                    <span id="kpi-despesa-sub" class="text-xs text-slate-500"></span>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <span class="text-xs uppercase text-slate-400 font-semibold">Saldo Líquido (12 meses)</span>
+                    <span id="kpi-saldo-lbl" class="text-xs uppercase text-slate-400 font-semibold">Saldo líquido</span>
                     <div id="kpi-saldo" class="text-2xl font-bold text-sky-400 mt-1">R$ 0,00</div>
                     <span id="kpi-poupado" class="text-xs text-slate-400">0% poupado</span>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
                     <span class="text-xs uppercase text-slate-400 font-semibold">Patrimônio / Investido</span>
                     <div id="kpi-investido" class="text-2xl font-bold text-indigo-400 mt-1">R$ 0,00</div>
-                    <span class="text-xs text-slate-500">Carteira ativa</span>
+                    <span class="text-xs text-slate-500">Carteira atual</span>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
                     <span class="text-xs uppercase text-slate-400 font-semibold">Reserva de Emergência</span>
                     <div id="kpi-reserva" class="text-2xl font-bold text-amber-400 mt-1">R$ 0,00</div>
-                    <span class="text-xs text-slate-500">Fundo de segurança</span>
+                    <span class="text-xs text-slate-500">Saldo guardado</span>
                 </div>
             </div>
 
@@ -106,7 +119,7 @@
                     </div>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <h2 class="text-sm font-semibold text-slate-300 mb-3">Distribuição de Despesas por Macro-Categoria</h2>
+                    <h2 id="tituloChartCategorias" class="text-sm font-semibold text-slate-300 mb-3">Distribuição de Despesas por Macro-Categoria</h2>
                     <div class="h-64 flex items-center justify-center">
                         <canvas id="chartCategorias"></canvas>
                     </div>
@@ -1702,11 +1715,9 @@
             const data = await res.json();
             dashboardCache = data;
 
-            // KPIs
-            document.getElementById('kpi-receita').textContent = fmtBRL(data.kpis.total_receita);
-            document.getElementById('kpi-despesa').textContent = fmtBRL(data.kpis.total_despesa);
-            document.getElementById('kpi-saldo').textContent = fmtBRL(data.kpis.saldo_anual);
-            document.getElementById('kpi-poupado').textContent = `${data.kpis.pct_poupado_anual}% da receita poupada no período`;
+            // KPIs (seguem o mês escolhido no seletor, ou os 12 meses)
+            if (dashSel !== 'todos' && !data.periodos.some(p => `${p.ano}-${String(p.mes).padStart(2, '0')}` === dashSel)) dashSel = 'todos';
+            carregarSaldoHoje();
             document.getElementById('kpi-investido').textContent = fmtBRL(data.kpis.total_investido);
             document.getElementById('kpi-reserva').textContent = fmtBRL(data.kpis.saldo_reserva);
 
@@ -1757,6 +1768,125 @@
 
             renderizarGraficosDashboard(data);
             renderizarMatrizResumo(data.resumo_categorias);
+            aplicarSelecaoDashboard();
+        }
+
+        // ---------- Seleção de mês do dashboard ----------
+        let dashSel = 'todos'; // 'todos' (12 meses) ou 'AAAA-MM'
+
+        function posicaoSelecionadaDashboard() {
+            if (dashSel === 'todos') return null;
+            const p = periodosAtuais.find(x => x.chave === dashSel);
+            return p ? p.pos : null;
+        }
+
+        function selecionarMesDashboard(chave) {
+            dashSel = chave;
+            aplicarSelecaoDashboard();
+            if (dashboardCache) renderizarGraficosDashboard(dashboardCache);
+        }
+
+        function deslocarMesDashboard(delta) {
+            const pos = posicaoSelecionadaDashboard();
+            const d = new Date();
+            const chaveHoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            let alvo;
+            if (!pos) {
+                const hojeNaJanela = periodosAtuais.find(p => p.chave === chaveHoje);
+                alvo = hojeNaJanela ? hojeNaJanela.pos : (delta > 0 ? 1 : 12);
+            } else {
+                alvo = pos + delta;
+            }
+            if (alvo < 1 || alvo > 12) {
+                // passou da ponta: move a linha do tempo global um mês e mantém o mês escolhido
+                const p = periodosAtuais[pos - 1];
+                const t = p.ano * 12 + (p.mes - 1) + delta;
+                dashSel = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
+                deslocarPeriodo(delta);
+                return;
+            }
+            selecionarMesDashboard(periodosAtuais[alvo - 1].chave);
+        }
+
+        function aplicarSelecaoDashboard() {
+            const data = dashboardCache;
+            if (!data) return;
+            const pos = posicaoSelecionadaDashboard();
+            const d = new Date();
+            const chaveHoje = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+            // Chips
+            const chip = (ativo, label, onclick, extra = '') => `<button type="button" onclick="${onclick}"
+                class="px-2.5 py-1 rounded text-xs border transition ${ativo ? 'bg-sky-500 text-slate-950 border-sky-400 font-semibold' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'} ${extra}">${label}</button>`;
+            document.getElementById('dashMesesChips').innerHTML =
+                chip(!pos, `12 meses <span class="opacity-70">(${periodosAtuais[0].label}→${periodosAtuais[11].label})</span>`, "selecionarMesDashboard('todos')") +
+                periodosAtuais.map(p => chip(pos === p.pos, p.label + (p.chave === chaveHoje ? ' •' : ''), `selecionarMesDashboard('${p.chave}')`,
+                    p.chave === chaveHoje && pos !== p.pos ? 'ring-1 ring-sky-500/50' : '')).join('');
+
+            // KPIs
+            const s = data.series_mensais;
+            let rec, desp, nome;
+            if (pos) {
+                const p = periodosAtuais[pos - 1];
+                rec = s.receitas[pos] || 0; desp = s.despesas[pos] || 0;
+                nome = `${MESES_NOME[p.mes - 1]}/${p.ano}`;
+            } else {
+                rec = data.kpis.total_receita; desp = data.kpis.total_despesa;
+                nome = '12 meses';
+            }
+            const saldo = rec - desp;
+            const pct = rec > 0 ? (saldo / rec * 100) : 0;
+            document.getElementById('kpi-receita-lbl').textContent = `Receita — ${nome}`;
+            document.getElementById('kpi-despesa-lbl').textContent = `Despesa — ${nome}`;
+            document.getElementById('kpi-saldo-lbl').textContent = `Saldo — ${nome}`;
+            document.getElementById('kpi-receita').textContent = fmtBRL(rec);
+            document.getElementById('kpi-despesa').textContent = fmtBRL(desp);
+            const elSaldo = document.getElementById('kpi-saldo');
+            elSaldo.textContent = fmtBRL(saldo);
+            elSaldo.className = `text-2xl font-bold mt-1 ${saldo < 0 ? 'text-rose-400' : 'text-sky-400'}`;
+            document.getElementById('kpi-poupado').textContent = `${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% da receita poupada`;
+            if (pos) {
+                const orc = s.orcado[pos] || 0;
+                document.getElementById('kpi-receita-sub').textContent = pos > 1 ? `mês anterior: ${fmtBRL(s.receitas[pos - 1] || 0)}` : '';
+                document.getElementById('kpi-despesa-sub').textContent = orc > 0 ? `orçado: ${fmtBRL(orc)} (${desp <= orc ? 'dentro' : 'acima'})` : (pos > 1 ? `mês anterior: ${fmtBRL(s.despesas[pos - 1] || 0)}` : '');
+            } else {
+                document.getElementById('kpi-receita-sub').textContent = `média ${fmtBRL(rec / 12)}/mês`;
+                document.getElementById('kpi-despesa-sub').textContent = `média ${fmtBRL(desp / 12)}/mês`;
+            }
+
+            // Destaque da coluna na tabela de visão geral
+            const tabela = document.getElementById('tbody-dashboard-anual').closest('table');
+            tabela.querySelectorAll('.col-sel').forEach(el => el.classList.remove('col-sel', 'bg-sky-500/10'));
+            if (pos) {
+                // coluna 0 = rótulo; meses nas colunas 1..12
+                tabela.querySelectorAll('tr').forEach(tr => {
+                    const cel = tr.children[pos];
+                    if (cel) cel.classList.add('col-sel', 'bg-sky-500/10');
+                });
+            }
+        }
+
+        // ---------- Saldo do dia vigente ----------
+        async function carregarSaldoHoje() {
+            const hoje = hojeISO();
+            const d = new Date();
+            const ultimo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()).padStart(2, '0')}`;
+            const res = await fetch(`/api/fluxo-diario?inicio=${hoje}&fim=${ultimo}`);
+            if (!res.ok) return;
+            const f = await res.json();
+            const dia = f.dias[0];
+            const el = document.getElementById('kpi-hoje');
+            el.textContent = fmtBRL(dia.saldo_acumulado);
+            el.className = `text-2xl font-bold mt-1 ${dia.saldo_acumulado < 0 ? 'text-rose-400' : 'text-sky-300'}`;
+            document.getElementById('kpi-hoje-lbl').textContent = `Saldo hoje (${fmtData(hoje).slice(0, 5)})`;
+            const partesHoje = [];
+            if (dia.entradas) partesHoje.push(`<span class="text-emerald-400">+${fmtBRL(dia.entradas)}</span>`);
+            if (dia.saidas) partesHoje.push(`<span class="text-rose-400">−${fmtBRL(dia.saidas)}</span>`);
+            const menorNegativo = f.menor_saldo && f.menor_saldo.saldo < 0;
+            document.getElementById('kpi-hoje-sub').innerHTML =
+                (partesHoje.length ? `hoje ${partesHoje.join(' ')} • ` : '') +
+                `fim do mês: <span class="${f.saldo_final < 0 ? 'text-rose-400' : 'text-slate-300'}">${fmtBRL(f.saldo_final)}</span>` +
+                (menorNegativo ? `<div class="text-rose-400">⚠ fica negativo em ${fmtData(f.menor_saldo.data).slice(0, 5)}</div>` : '');
         }
 
         function renderizarGraficosDashboard(data) {
@@ -1764,15 +1894,18 @@
             const recData = labels.map((_, i) => data.series_mensais.receitas[i+1]);
             const despData = labels.map((_, i) => data.series_mensais.despesas[i+1]);
             const acumData = labels.map((_, i) => data.series_mensais.saldo_acumulado[i+1]);
+            const posSel = posicaoSelecionadaDashboard();
+            const corBarra = (cor, corApagada) => labels.map((_, i) => !posSel || i + 1 === posSel ? cor : corApagada);
 
+            if (typeof Chart === 'undefined') return;
             if (chartEvolucaoInstance) chartEvolucaoInstance.destroy();
             chartEvolucaoInstance = new Chart(document.getElementById('chartEvolucao'), {
                 type: 'bar',
                 data: {
                     labels,
                     datasets: [
-                        { label: 'Receitas', data: recData, backgroundColor: '#10b981', borderRadius: 4 },
-                        { label: 'Despesas', data: despData, backgroundColor: '#f43f5e', borderRadius: 4 },
+                        { label: 'Receitas', data: recData, backgroundColor: corBarra('#10b981', 'rgba(16,185,129,0.25)'), borderRadius: 4 },
+                        { label: 'Despesas', data: despData, backgroundColor: corBarra('#f43f5e', 'rgba(244,63,94,0.25)'), borderRadius: 4 },
                         { label: 'Saldo Acumulado', data: acumData, type: 'line', borderColor: '#38bdf8', backgroundColor: '#38bdf8', borderWidth: 2, tension: 0.3 }
                     ]
                 },
@@ -1783,15 +1916,23 @@
                     scales: {
                         x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
                         y: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } }
+                    },
+                    onClick: (evt, els) => {
+                        if (!els.length) return;
+                        const p = data.periodos[els[0].index];
+                        selecionarMesDashboard(`${p.ano}-${String(p.mes).padStart(2, '0')}`);
                     }
                 }
             });
 
-            // Agrupar despesas por Macro-Categoria
+            // Agrupar despesas por Macro-Categoria (mês selecionado ou 12 meses)
             const macroTotals = {};
-            data.resumo_categorias.filter(c => c.tipo === 'Despesa' && c.total_ano > 0).forEach(c => {
-                macroTotals[c.macro_categoria] = (macroTotals[c.macro_categoria] || 0) + c.total_ano;
+            data.resumo_categorias.filter(c => c.tipo === 'Despesa').forEach(c => {
+                const v = posSel ? (c.meses[posSel] || 0) : c.total_ano;
+                if (v > 0) macroTotals[c.macro_categoria] = (macroTotals[c.macro_categoria] || 0) + v;
             });
+            document.getElementById('tituloChartCategorias').textContent =
+                `Despesas por Macro-Categoria — ${posSel ? `${MESES_NOME[data.periodos[posSel - 1].mes - 1]}/${data.periodos[posSel - 1].ano}` : '12 meses'}`;
 
             if (chartCategoriasInstance) chartCategoriasInstance.destroy();
             chartCategoriasInstance = new Chart(document.getElementById('chartCategorias'), {
