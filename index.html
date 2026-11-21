@@ -88,7 +88,7 @@
                     <div id="kpi-receita" class="text-2xl font-bold text-emerald-400 mt-1">R$ 0,00</div>
                     <span id="kpi-receita-sub" class="text-xs text-slate-500"></span>
                 </div>
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <div id="kpi-despesa-card" onclick="abrirLancamentosDespesaDashboard()" class="bg-slate-900 border border-slate-800 rounded-xl p-4 cursor-pointer hover:border-rose-500/50 transition" title="Ver os lançamentos">
                     <span id="kpi-despesa-lbl" class="text-xs uppercase text-slate-400 font-semibold">Despesa</span>
                     <div id="kpi-despesa" class="text-2xl font-bold text-rose-400 mt-1">R$ 0,00</div>
                     <span id="kpi-despesa-sub" class="text-xs text-slate-500"></span>
@@ -113,13 +113,14 @@
             <!-- Gráficos -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 lg:col-span-2">
-                    <h2 class="text-sm font-semibold text-slate-300 mb-3">Evolução Mensal: Receitas vs Despesas e Saldo Acumulado</h2>
+                    <h2 id="tituloChartEvolucao" class="text-sm font-semibold text-slate-300 mb-3">Evolução Mensal: Receitas vs Despesas e Saldo Acumulado</h2>
                     <div class="h-64">
                         <canvas id="chartEvolucao"></canvas>
                     </div>
                 </div>
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <h2 id="tituloChartCategorias" class="text-sm font-semibold text-slate-300 mb-3">Distribuição de Despesas por Macro-Categoria</h2>
+                    <h2 id="tituloChartCategorias" class="text-sm font-semibold text-slate-300 mb-1">Distribuição de Despesas por Macro-Categoria</h2>
+                    <p class="text-[11px] text-slate-500 mb-2">Clique em uma fatia para filtrar o dashboard</p>
                     <div class="h-64 flex items-center justify-center">
                         <canvas id="chartCategorias"></canvas>
                     </div>
@@ -1344,6 +1345,7 @@
                 carregarOrcamento(),
                 carregarPlanejamento()
             ]);
+            if (dashMacro && dashboardCache) { aplicarSelecaoDashboard(); renderizarGraficosDashboard(dashboardCache); }
         }
 
         // ==========================================
@@ -1773,6 +1775,39 @@
 
         // ---------- Seleção de mês do dashboard ----------
         let dashSel = 'todos'; // 'todos' (12 meses) ou 'AAAA-MM'
+        let dashMacro = null;  // macro-categoria filtrada pelo donut (ou null)
+
+        const PALETA_MACRO = ['#38bdf8', '#f43f5e', '#10b981', '#f59e0b', '#a855f7', '#6366f1', '#ec4899', '#14b8a6', '#84cc16', '#fb923c', '#94a3b8', '#22d3ee'];
+        // Cor fixa por macro-categoria (a mesma em qualquer filtro)
+        function corMacro(nome) {
+            const idx = MACROS_PADRAO.Despesa.indexOf(nome);
+            if (idx >= 0) return PALETA_MACRO[idx % PALETA_MACRO.length];
+            let h = 0; for (const ch of nome) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+            return PALETA_MACRO[h % PALETA_MACRO.length];
+        }
+
+        // Despesas de uma macro por posição (1..12) da janela
+        function serieMacroDashboard(data, macro) {
+            const serie = Array(12).fill(0);
+            data.resumo_categorias.filter(c => c.tipo === 'Despesa' && c.macro_categoria === macro)
+                .forEach(c => { for (let i = 1; i <= 12; i++) serie[i - 1] += c.meses[i] || 0; });
+            return serie.map(v => Math.round(v * 100) / 100);
+        }
+
+        function filtrarMacroDashboard(macro) {
+            dashMacro = dashMacro === macro ? null : macro;
+            aplicarSelecaoDashboard();
+            if (dashboardCache) renderizarGraficosDashboard(dashboardCache);
+        }
+
+        function abrirLancamentosDespesaDashboard() {
+            const pos = posicaoSelecionadaDashboard();
+            const p = pos ? periodosAtuais[pos - 1] : null;
+            abrirResumoLancamentos({
+                titulo: `Despesas${dashMacro ? ` de ${dashMacro}` : ''} — ${p ? `${MESES_NOME[p.mes - 1]}/${p.ano}` : `${periodosAtuais[0].label} → ${periodosAtuais[11].label}`}`,
+                filtros: { tipo: 'Despesa', ...(dashMacro ? { macro: dashMacro } : {}), ...(p ? { periodo: p.chave } : {}) }
+            });
+        }
 
         function posicaoSelecionadaDashboard() {
             if (dashSel === 'todos') return null;
@@ -1821,7 +1856,9 @@
             document.getElementById('dashMesesChips').innerHTML =
                 chip(!pos, `12 meses <span class="opacity-70">(${periodosAtuais[0].label}→${periodosAtuais[11].label})</span>`, "selecionarMesDashboard('todos')") +
                 periodosAtuais.map(p => chip(pos === p.pos, p.label + (p.chave === chaveHoje ? ' •' : ''), `selecionarMesDashboard('${p.chave}')`,
-                    p.chave === chaveHoje && pos !== p.pos ? 'ring-1 ring-sky-500/50' : '')).join('');
+                    p.chave === chaveHoje && pos !== p.pos ? 'ring-1 ring-sky-500/50' : '')).join('') +
+                (dashMacro ? `<button type="button" onclick="filtrarMacroDashboard(null)" title="Remover filtro de macro-categoria"
+                    class="ml-2 px-2.5 py-1 rounded-full text-xs font-semibold border border-slate-600 text-slate-950" style="background:${corMacro(dashMacro)}">${escHtml(dashMacro)} ✕</button>` : '');
 
             // KPIs
             const s = data.series_mensais;
@@ -1837,15 +1874,28 @@
             const saldo = rec - desp;
             const pct = rec > 0 ? (saldo / rec * 100) : 0;
             document.getElementById('kpi-receita-lbl').textContent = `Receita — ${nome}`;
-            document.getElementById('kpi-despesa-lbl').textContent = `Despesa — ${nome}`;
+            document.getElementById('kpi-despesa-lbl').textContent = dashMacro ? `Despesa · ${dashMacro} — ${nome}` : `Despesa — ${nome}`;
             document.getElementById('kpi-saldo-lbl').textContent = `Saldo — ${nome}`;
             document.getElementById('kpi-receita').textContent = fmtBRL(rec);
-            document.getElementById('kpi-despesa').textContent = fmtBRL(desp);
+            let despExibida = desp;
+            if (dashMacro) {
+                const serie = serieMacroDashboard(data, dashMacro);
+                despExibida = pos ? serie[pos - 1] : serie.reduce((a, b) => a + b, 0);
+            }
+            document.getElementById('kpi-despesa').textContent = fmtBRL(despExibida);
+            document.getElementById('kpi-despesa-card').style.borderColor = dashMacro ? corMacro(dashMacro) : '';
             const elSaldo = document.getElementById('kpi-saldo');
             elSaldo.textContent = fmtBRL(saldo);
             elSaldo.className = `text-2xl font-bold mt-1 ${saldo < 0 ? 'text-rose-400' : 'text-sky-400'}`;
             document.getElementById('kpi-poupado').textContent = `${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% da receita poupada`;
-            if (pos) {
+            if (dashMacro) {
+                const orcLinha = (orcamentoCache || []).find(o => o.macro_categoria === dashMacro);
+                const orc = orcLinha ? (pos ? orcLinha.orcado[pos] || 0 : orcLinha.total_orcado) : 0;
+                const share = desp > 0 ? despExibida / desp * 100 : 0;
+                document.getElementById('kpi-receita-sub').textContent = pos > 1 ? `mês anterior: ${fmtBRL(s.receitas[pos - 1] || 0)}` : '';
+                document.getElementById('kpi-despesa-sub').textContent = `${share.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% das despesas`
+                    + (orc > 0 ? ` • orçado ${fmtBRL(orc)} (${despExibida <= orc ? 'dentro' : 'acima'})` : '');
+            } else if (pos) {
                 const orc = s.orcado[pos] || 0;
                 document.getElementById('kpi-receita-sub').textContent = pos > 1 ? `mês anterior: ${fmtBRL(s.receitas[pos - 1] || 0)}` : '';
                 document.getElementById('kpi-despesa-sub').textContent = orc > 0 ? `orçado: ${fmtBRL(orc)} (${desp <= orc ? 'dentro' : 'acima'})` : (pos > 1 ? `mês anterior: ${fmtBRL(s.despesas[pos - 1] || 0)}` : '');
@@ -1897,18 +1947,34 @@
             const posSel = posicaoSelecionadaDashboard();
             const corBarra = (cor, corApagada) => labels.map((_, i) => !posSel || i + 1 === posSel ? cor : corApagada);
 
+            // Com filtro de macro-categoria: despesas da macro por mês x orçado da macro
+            let datasets;
+            if (dashMacro) {
+                const serie = serieMacroDashboard(data, dashMacro);
+                const orcLinha = (orcamentoCache || []).find(o => o.macro_categoria === dashMacro);
+                const cor = corMacro(dashMacro);
+                datasets = [
+                    { label: `Despesas — ${dashMacro}`, data: serie, backgroundColor: corBarra(cor, cor + '40'), borderRadius: 4 },
+                    ...(orcLinha && Object.values(orcLinha.orcado).some(v => v > 0)
+                        ? [{ label: `Orçado — ${dashMacro}`, data: labels.map((_, i) => orcLinha.orcado[i + 1] || 0), type: 'line',
+                             borderColor: '#f59e0b', backgroundColor: '#f59e0b', borderDash: [5, 4], borderWidth: 2, pointRadius: 2, tension: 0 }]
+                        : [])
+                ];
+                document.getElementById('tituloChartEvolucao').textContent = `Evolução Mensal: despesas de ${dashMacro}`;
+            } else {
+                datasets = [
+                    { label: 'Receitas', data: recData, backgroundColor: corBarra('#10b981', 'rgba(16,185,129,0.25)'), borderRadius: 4 },
+                    { label: 'Despesas', data: despData, backgroundColor: corBarra('#f43f5e', 'rgba(244,63,94,0.25)'), borderRadius: 4 },
+                    { label: 'Saldo Acumulado', data: acumData, type: 'line', borderColor: '#38bdf8', backgroundColor: '#38bdf8', borderWidth: 2, tension: 0.3 }
+                ];
+                document.getElementById('tituloChartEvolucao').textContent = 'Evolução Mensal: Receitas vs Despesas e Saldo Acumulado';
+            }
+
             if (typeof Chart === 'undefined') return;
             if (chartEvolucaoInstance) chartEvolucaoInstance.destroy();
             chartEvolucaoInstance = new Chart(document.getElementById('chartEvolucao'), {
                 type: 'bar',
-                data: {
-                    labels,
-                    datasets: [
-                        { label: 'Receitas', data: recData, backgroundColor: corBarra('#10b981', 'rgba(16,185,129,0.25)'), borderRadius: 4 },
-                        { label: 'Despesas', data: despData, backgroundColor: corBarra('#f43f5e', 'rgba(244,63,94,0.25)'), borderRadius: 4 },
-                        { label: 'Saldo Acumulado', data: acumData, type: 'line', borderColor: '#38bdf8', backgroundColor: '#38bdf8', borderWidth: 2, tension: 0.3 }
-                    ]
-                },
+                data: { labels, datasets },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
@@ -1935,19 +2001,35 @@
                 `Despesas por Macro-Categoria — ${posSel ? `${MESES_NOME[data.periodos[posSel - 1].mes - 1]}/${data.periodos[posSel - 1].ano}` : '12 meses'}`;
 
             if (chartCategoriasInstance) chartCategoriasInstance.destroy();
+            const nomesMacro = Object.keys(macroTotals);
             chartCategoriasInstance = new Chart(document.getElementById('chartCategorias'), {
                 type: 'doughnut',
                 data: {
-                    labels: Object.keys(macroTotals),
+                    labels: nomesMacro,
                     datasets: [{
                         data: Object.values(macroTotals),
-                        backgroundColor: ['#38bdf8', '#f43f5e', '#10b981', '#f59e0b', '#a855f7', '#6366f1', '#ec4899', '#14b8a6']
+                        backgroundColor: nomesMacro.map(m => !dashMacro || m === dashMacro ? corMacro(m) : corMacro(m) + '33'),
+                        borderColor: nomesMacro.map(m => m === dashMacro ? '#f8fafc' : '#0f172a'),
+                        borderWidth: nomesMacro.map(m => m === dashMacro ? 2 : 1),
+                        offset: nomesMacro.map(m => m === dashMacro ? 12 : 0)
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { position: 'right', labels: { color: '#cbd5e1', boxWidth: 12 } } }
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { color: '#cbd5e1', boxWidth: 12 },
+                            onClick: (e, item) => filtrarMacroDashboard(nomesMacro[item.index])
+                        },
+                        tooltip: { callbacks: { label: (c) => {
+                            const tot = c.dataset.data.reduce((a, b) => a + b, 0);
+                            return `${c.label}: ${fmtBRL(c.raw)} (${(tot ? c.raw / tot * 100 : 0).toFixed(1)}%)`;
+                        } } }
+                    },
+                    onClick: (evt, els) => { if (els.length) filtrarMacroDashboard(nomesMacro[els[0].index]); },
+                    onHover: (evt, els) => { evt.native.target.style.cursor = els.length ? 'pointer' : 'default'; }
                 }
             });
         }
