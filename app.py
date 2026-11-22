@@ -2391,6 +2391,71 @@ def _gravar_orcamento(conn, macro: str, ano: int, mes: int, valor: float, sobres
     return True
 
 
+@app.get("/api/orcamento/macros")
+def listar_macros_orcamento():
+    conn = get_db_connection()
+    macros = _macros_despesa(conn)
+    conn.close()
+    return macros
+
+
+@app.get("/api/orcamento/serie")
+def serie_orcamento(de: str, ate: str, macro: Optional[str] = None):
+    """
+    Orçado x realizado mês a mês entre `de` e `ate` (AAAA-MM), para uma macro-categoria ou,
+    sem `macro`, para o total (orçado de todas as macros x todas as despesas).
+    """
+    meses = _intervalo_meses(de, ate)
+    k_ini, k_fim = chave_periodo(*meses[0]), chave_periodo(*meses[-1])
+    conn = get_db_connection()
+    if macro:
+        orc_rows = conn.execute(
+            """SELECT ano, mes, SUM(valor_orcado) AS v FROM orcamento
+               WHERE macro_categoria = ? AND (ano * 100 + mes) BETWEEN ? AND ? GROUP BY ano, mes""",
+            (macro, k_ini, k_fim)).fetchall()
+        real_rows = conn.execute(
+            """SELECT l.ano, l.mes, SUM(l.valor) AS v FROM lancamentos l
+               LEFT JOIN categorias c ON c.nome = l.categoria
+               WHERE l.tipo = 'Despesa' AND COALESCE(c.macro_categoria, 'Outros') = ?
+                 AND (l.ano * 100 + l.mes) BETWEEN ? AND ? GROUP BY l.ano, l.mes""",
+            (macro, k_ini, k_fim)).fetchall()
+    else:
+        orc_rows = conn.execute(
+            """SELECT ano, mes, SUM(valor_orcado) AS v FROM orcamento
+               WHERE (ano * 100 + mes) BETWEEN ? AND ? GROUP BY ano, mes""", (k_ini, k_fim)).fetchall()
+        real_rows = conn.execute(
+            """SELECT ano, mes, SUM(valor) AS v FROM lancamentos
+               WHERE tipo = 'Despesa' AND (ano * 100 + mes) BETWEEN ? AND ? GROUP BY ano, mes""",
+            (k_ini, k_fim)).fetchall()
+    conn.close()
+    orc = {(r["ano"], r["mes"]): r["v"] or 0 for r in orc_rows}
+    real = {(r["ano"], r["mes"]): r["v"] or 0 for r in real_rows}
+
+    serie = []
+    acum_o = acum_r = 0.0
+    for a, m in meses:
+        o, r = round(orc.get((a, m), 0.0), 2), round(real.get((a, m), 0.0), 2)
+        acum_o += o
+        acum_r += r
+        serie.append({
+            "chave": f"{a:04d}-{m:02d}", "ano": a, "mes": m, "label": f"{MESES_ABREV[m - 1]}/{str(a)[2:]}",
+            "orcado": o, "realizado": r, "diferenca": round(r - o, 2),
+            "orcado_acumulado": round(acum_o, 2), "realizado_acumulado": round(acum_r, 2),
+        })
+    tot_o, tot_r = round(acum_o, 2), round(acum_r, 2)
+    return {
+        "macro": macro,
+        "meses": serie,
+        "total_orcado": tot_o,
+        "total_realizado": tot_r,
+        "diferenca": round(tot_r - tot_o, 2),
+        "execucao_pct": round(tot_r / tot_o * 100, 1) if tot_o > 0 else None,
+        "meses_acima": sum(1 for x in serie if x["orcado"] > 0 and x["realizado"] > x["orcado"] + 0.005),
+        "meses_com_orcamento": sum(1 for x in serie if x["orcado"] > 0),
+        "meses_sem_orcamento_com_gasto": sum(1 for x in serie if x["orcado"] == 0 and x["realizado"] > 0),
+    }
+
+
 @app.post("/api/orcamento/lote")
 def orcamento_em_lote(payload: OrcamentoLoteInput):
     """Define o mesmo valor orçado para uma ou várias macro-categorias em todos os meses de um intervalo."""

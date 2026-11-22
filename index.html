@@ -781,6 +781,36 @@
                 </div>
             </div>
 
+            <!-- Gráfico Orçado x Realizado -->
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div class="flex flex-wrap items-end justify-between gap-3">
+                    <h3 class="text-sm font-semibold text-white">📊 Orçado x Realizado</h3>
+                    <div class="flex flex-wrap items-end gap-2">
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-0.5">Conta</label>
+                            <select id="orcGrafMacro" onchange="carregarGraficoOrcamento()" class="rounded px-2 py-1 text-sm font-semibold min-w-[180px]"></select>
+                        </div>
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-0.5">De</label>
+                            <input type="month" id="orcGrafDe" onchange="_orcGrafManual = true; carregarGraficoOrcamento()" class="rounded px-2 py-1 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-0.5">Até</label>
+                            <input type="month" id="orcGrafAte" onchange="_orcGrafManual = true; carregarGraficoOrcamento()" class="rounded px-2 py-1 text-sm">
+                        </div>
+                        <div class="flex flex-wrap gap-1 text-[11px]">
+                            <button type="button" onclick="presetGraficoOrcamento('janela')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Período exibido</button>
+                            <button type="button" onclick="presetGraficoOrcamento('ano')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Ano atual</button>
+                            <button type="button" onclick="presetGraficoOrcamento('6m')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">Últimos 6 meses</button>
+                        </div>
+                        <label class="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer pb-1"><input type="checkbox" id="orcGrafAcum" onchange="renderizarGraficoOrcamento()"> Acumulado</label>
+                    </div>
+                </div>
+                <div id="orcGrafKpis" class="grid grid-cols-2 md:grid-cols-5 gap-2"></div>
+                <div class="h-72"><canvas id="chartOrcamento"></canvas></div>
+                <p class="text-[11px] text-slate-500">Barras = realizado (verde dentro, vermelho acima do orçado) • linha tracejada = orçado • clique numa barra para ver os lançamentos.</p>
+            </div>
+
             <!-- Orçar vários meses -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
                 <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1411,7 +1441,9 @@
             mostrarRotulos = !mostrarRotulos;
             try { localStorage.setItem(STORAGE_ROTULOS, mostrarRotulos ? '1' : '0'); } catch (e) {}
             atualizarBotaoRotulos();
-            [chartEvolucaoInstance, chartCategoriasInstance, typeof chartFluxoInstance !== 'undefined' ? chartFluxoInstance : null]
+            [chartEvolucaoInstance, chartCategoriasInstance,
+             typeof chartFluxoInstance !== 'undefined' ? chartFluxoInstance : null,
+             typeof chartOrcamentoInstance !== 'undefined' ? chartOrcamentoInstance : null]
                 .forEach(c => { if (c && c.update) c.update(); });
         }
 
@@ -1430,7 +1462,7 @@
                 ctx.textAlign = 'center';
                 chart.data.datasets.forEach((ds, di) => {
                     const meta = chart.getDatasetMeta(di);
-                    if (meta.hidden || !chart.isDatasetVisible(di)) return;
+                    if (meta.hidden || !chart.isDatasetVisible(di) || ds.rotulos === false) return;
                     const tipo = meta.type || chart.config.type;
                     if (tipo === 'doughnut' || tipo === 'pie') {
                         const total = ds.data.reduce((a, b) => a + (b || 0), 0);
@@ -3546,6 +3578,8 @@
             renderizarOrcamento();
             renderizarMatrizOrcamento();
             popularMacrosLote();
+            await popularSelectContaOrcamento();
+            await carregarGraficoOrcamento();
         }
 
         function renderizarOrcamento() {
@@ -3584,6 +3618,122 @@
                     <td class="font-mono font-semibold ${row.variacao_anual > 0 ? 'text-rose-400' : 'text-emerald-400'} ${CLS_CELULA}" onclick="abrirCelula(${celTot})">${fmtBRL(row.variacao_anual)}</td>
                 </tr>`;
             }).join('');
+        }
+
+        // ---------- Gráfico Orçado x Realizado ----------
+        let chartOrcamentoInstance = null;
+        let orcGrafCache = null;
+        let _orcGrafManual = false;
+
+        async function popularSelectContaOrcamento() {
+            const sel = document.getElementById('orcGrafMacro');
+            const antes = sel.value;
+            const res = await fetch('/api/orcamento/macros');
+            const macros = res.ok ? await res.json() : [];
+            sel.innerHTML = '<option value="">Todas (total)</option>' + macros.map(m => `<option value="${escHtml(m)}">${escHtml(m)}</option>`).join('');
+            sel.value = macros.includes(antes) ? antes : '';
+        }
+
+        function presetGraficoOrcamento(tipo) {
+            const de = document.getElementById('orcGrafDe'), ate = document.getElementById('orcGrafAte');
+            const d = new Date();
+            if (tipo === 'janela') { de.value = periodosAtuais[0].chave; ate.value = periodosAtuais[11].chave; _orcGrafManual = false; }
+            if (tipo === 'ano') { de.value = `${d.getFullYear()}-01`; ate.value = `${d.getFullYear()}-12`; _orcGrafManual = true; }
+            if (tipo === '6m') {
+                const t = d.getFullYear() * 12 + d.getMonth() - 5;
+                de.value = chaveMes(Math.floor(t / 12), (t % 12) + 1);
+                ate.value = chaveMes(d.getFullYear(), d.getMonth() + 1);
+                _orcGrafManual = true;
+            }
+            carregarGraficoOrcamento();
+        }
+
+        async function carregarGraficoOrcamento() {
+            const de = document.getElementById('orcGrafDe'), ate = document.getElementById('orcGrafAte');
+            // Sem escolha manual, o período acompanha a linha do tempo do topo
+            if (!_orcGrafManual || !de.value || !ate.value) { de.value = periodosAtuais[0].chave; ate.value = periodosAtuais[11].chave; }
+            const macro = document.getElementById('orcGrafMacro').value;
+            const params = new URLSearchParams({ de: de.value, ate: ate.value });
+            if (macro) params.append('macro', macro);
+            const res = await fetch(`/api/orcamento/serie?${params.toString()}`);
+            if (!res.ok) {
+                document.getElementById('orcGrafKpis').innerHTML = `<div class="col-span-full text-xs text-rose-400">${escHtml(msgErro(await res.json().catch(() => ({}))))}</div>`;
+                return;
+            }
+            orcGrafCache = await res.json();
+            renderizarGraficoOrcamento();
+        }
+
+        function renderizarGraficoOrcamento() {
+            const g = orcGrafCache;
+            if (!g) return;
+            const conta = g.macro || 'Todas as contas';
+            const kpi = (lbl, val, cls, sub = '') => `<div class="bg-slate-800/50 rounded-lg p-2.5"><span class="text-[11px] text-slate-400">${lbl}</span><div class="font-bold font-mono ${cls}">${val}</div>${sub ? `<div class="text-[10px] text-slate-500">${sub}</div>` : ''}</div>`;
+            const acima = g.diferenca > 0;
+            document.getElementById('orcGrafKpis').innerHTML =
+                kpi('Orçado', fmtBRL(g.total_orcado), 'text-amber-300', conta) +
+                kpi('Realizado', fmtBRL(g.total_realizado), 'text-white', `${g.meses.length} mês(es)`) +
+                kpi(acima ? 'Acima do orçado' : 'Abaixo do orçado', fmtBRL(Math.abs(g.diferenca)), acima ? 'text-rose-400' : 'text-emerald-400') +
+                kpi('Execução', g.execucao_pct == null ? '—' : `${g.execucao_pct.toLocaleString('pt-BR')}%`, g.execucao_pct > 100 ? 'text-rose-400' : 'text-sky-300') +
+                kpi('Meses estourados', `${g.meses_acima} de ${g.meses_com_orcamento}`, g.meses_acima ? 'text-rose-400' : 'text-emerald-400',
+                    g.meses_sem_orcamento_com_gasto ? `${g.meses_sem_orcamento_com_gasto} mês(es) com gasto sem orçamento` : '');
+
+            if (typeof Chart === 'undefined') return;
+            const acum = document.getElementById('orcGrafAcum').checked;
+            const labels = g.meses.map(m => m.label);
+            const real = g.meses.map(m => acum ? m.realizado_acumulado : m.realizado);
+            const orc = g.meses.map(m => acum ? m.orcado_acumulado : m.orcado);
+            const cores = g.meses.map((m, i) => orc[i] > 0 && real[i] > orc[i] + 0.005 ? '#f43f5e' : orc[i] > 0 ? '#10b981' : '#64748b');
+            if (chartOrcamentoInstance) chartOrcamentoInstance.destroy();
+            chartOrcamentoInstance = new Chart(document.getElementById('chartOrcamento'), {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        { label: acum ? 'Realizado acumulado' : 'Realizado', data: real, backgroundColor: cores, borderRadius: 4, order: 2 },
+                        { label: acum ? 'Orçado acumulado' : 'Orçado', data: orc, type: 'line', borderColor: '#f59e0b', backgroundColor: '#f59e0b',
+                          borderDash: [6, 4], borderWidth: 2, pointRadius: 3, tension: 0, order: 1, rotulos: false }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#cbd5e1',
+                                generateLabels: () => [
+                                    { text: 'Realizado (dentro)', fillStyle: '#10b981', strokeStyle: '#10b981', fontColor: '#cbd5e1', datasetIndex: 0 },
+                                    { text: 'Realizado (acima)', fillStyle: '#f43f5e', strokeStyle: '#f43f5e', fontColor: '#cbd5e1', datasetIndex: 0 },
+                                    { text: acum ? 'Orçado acumulado' : 'Orçado', fillStyle: '#f59e0b', strokeStyle: '#f59e0b', fontColor: '#cbd5e1', lineDash: [6, 4], datasetIndex: 1 }
+                                ]
+                            },
+                            onClick: () => {}
+                        },
+                        tooltip: { callbacks: {
+                            label: (c) => `${c.dataset.label}: ${fmtBRL(c.raw)}`,
+                            footer: (items) => {
+                                const i = items[0].dataIndex, dif = real[i] - orc[i];
+                                return orc[i] > 0 ? `${dif > 0 ? 'Acima' : 'Abaixo'}: ${fmtBRL(Math.abs(dif))} (${(real[i] / orc[i] * 100).toFixed(1)}%)` : 'Sem orçamento';
+                            }
+                        } }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
+                        y: { beginAtZero: true, grace: '10%', ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } }
+                    },
+                    onClick: (evt, els) => {
+                        if (!els.length) return;
+                        const m = g.meses[els[0].index];
+                        abrirResumoLancamentos({
+                            titulo: `Despesas${g.macro ? ` de ${g.macro}` : ''} — ${MESES_NOME[m.mes - 1]}/${m.ano}`,
+                            subtitulo: `Orçado no mês: ${fmtBRL(m.orcado)}`,
+                            filtros: { tipo: 'Despesa', ...(g.macro ? { macro: g.macro } : {}), periodo: m.chave }
+                        });
+                    },
+                    onHover: (evt, els) => { evt.native.target.style.cursor = els.length ? 'pointer' : 'default'; }
+                }
+            });
         }
 
         // ---------- Matriz 12 meses ----------
