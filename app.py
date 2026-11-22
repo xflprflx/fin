@@ -7,6 +7,7 @@ import os
 import sqlite3
 import json
 import calendar
+from decimal import Decimal, ROUND_HALF_UP
 import math
 import uuid
 from datetime import datetime, date, timedelta
@@ -224,6 +225,13 @@ def init_db():
         if col not in colunas_lanc:
             cur.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {ddl}")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_lanc_recorrencia ON lancamentos(recorrencia_id)")
+
+    # Migração: seguros por faixa no financiamento
+    colunas_fin = {r[1] for r in cur.execute("PRAGMA table_info(financiamentos)").fetchall()}
+    for col, ddl in (("seguro_modo", "TEXT NOT NULL DEFAULT 'fixo'"), ("dfi_mensal", "REAL NOT NULL DEFAULT 0.0"),
+                     ("mip_faixas", "TEXT NOT NULL DEFAULT '[]'")):
+        if col not in colunas_fin:
+            cur.execute(f"ALTER TABLE financiamentos ADD COLUMN {col} {ddl}")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_lanc_cartao ON lancamentos(cartao_id, ano, mes)")
 
     # Garante configuração inicial da reserva de emergência
@@ -387,6 +395,11 @@ class CartaoInput(BaseModel):
 TR_ANUAL_MIN, TR_ANUAL_MAX = -5.0, 20.0
 
 
+class FaixaMIP(BaseModel):
+    parcela: int = Field(..., ge=1, description="Vale a partir desta parcela")
+    taxa_pct: float = Field(..., ge=0, le=5, description="% do saldo devedor (ex.: 0.0144)")
+
+
 class FinanciamentoInput(BaseModel):
     nome: str = Field(..., min_length=1, description="Ex.: Apartamento - Caixa")
     valor_financiado: float = Field(..., gt=0)
@@ -398,7 +411,11 @@ class FinanciamentoInput(BaseModel):
         default=0.0, ge=TR_ANUAL_MIN, le=TR_ANUAL_MAX,
         description="TR projetada em % AO ANO (ex.: 1.8); convertida para a taxa mensal equivalente",
     )
-    seguro_mensal: float = Field(default=0.0, ge=0, description="MIP + DFI em R$/mês")
+    seguro_modo: str = Field(default="fixo", pattern="^(fixo|faixas)$",
+                             description="fixo = valor mensal; faixas = MIP % do saldo por faixa + DFI fixo")
+    seguro_mensal: float = Field(default=0.0, ge=0, description="Modo fixo: MIP + DFI em R$/mês")
+    dfi_mensal: float = Field(default=0.0, ge=0, description="Modo faixas: DFI em R$/mês")
+    mip_faixas: List["FaixaMIP"] = Field(default_factory=list, description="Modo faixas: a partir de qual parcela vale cada taxa")
     taxa_adm_mensal: float = Field(default=0.0, ge=0, description="Taxa de administração em R$/mês")
     categoria: str = Field(default="Juros e Empréstimos")
     forma_pgto: str = "Boleto"
@@ -417,6 +434,9 @@ class TRMensalInput(BaseModel):
 
 class TRProjetadaInput(BaseModel):
     tr_anual_pct: float = Field(..., ge=TR_ANUAL_MIN, le=TR_ANUAL_MAX, description="TR projetada em % ao ano")
+
+
+FinanciamentoInput.model_rebuild() if hasattr(FinanciamentoInput, "model_rebuild") else FinanciamentoInput.update_forward_refs()
 
 
 class LancamentoUpdateInput(BaseModel):
@@ -661,46 +681,86 @@ def tr_mensal_para_anual(tr_mensal_pct: float) -> float:
     return ((1 + tr_mensal_pct / 100) ** 12 - 1) * 100
 
 
+def r2(x) -> float:
+    """Arredonda ao centavo com meio para cima (padrão bancário), sem os desvios do round() de float."""
+    return float(Decimal(repr(float(x))).quantize(Decimal("0.01"), ROUND_HALF_UP))
+
+
+def mip_faixas_de(fin: dict) -> List[dict]:
+    """Faixas de MIP [{parcela, taxa_pct}] ordenadas, a partir do JSON gravado no contrato."""
+    bruto = fin.get("mip_faixas")
+    if isinstance(bruto, str):
+        try:
+            bruto = json.loads(bruto or "[]")
+        except ValueError:
+            bruto = []
+    faixas = []
+    for f in bruto or []:
+        f = f if isinstance(f, dict) else (f.model_dump() if hasattr(f, "model_dump") else dict(f))
+        faixas.append({"parcela": int(f["parcela"]), "taxa_pct": float(f["taxa_pct"])})
+    return sorted(faixas, key=lambda f: f["parcela"])
+
+
 def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None, amortizacoes: Optional[List[dict]] = None) -> List[dict]:
     """
-    Gera o cronograma SAC corrigido pela TR. A cada mês k:
-      saldo corrigido = saldo anterior × (1 + TR mensal)
-      amortização     = saldo corrigido ÷ prestações restantes
+    Gera o cronograma SAC corrigido pela TR, com todos os valores arredondados ao centavo
+    (como a planilha de evolução da Caixa). A cada mês k:
+      correção TR     = saldo anterior × TR mensal
+      saldo corrigido = saldo anterior + correção
+      amortização     = amortização do mês anterior × (1 + TR)   [1º mês: valor financiado ÷ prazo]
+                        → constante quando a TR é zero
       juros           = saldo corrigido × taxa mensal
-      prestação       = amortização + juros + seguros + taxa de administração
       novo saldo      = saldo corrigido − amortização
+      seguros         = modo "fixo": valor mensal informado;
+                        modo "faixas": MIP = % da faixa × saldo devedor após a parcela, + DFI fixo
+                        (sem seguros quando o saldo zera, como na última parcela)
+      prestação       = amortização + juros + seguros + taxa de administração   (= "encargo" da Caixa)
+    Na última parcela o resíduo de arredondamento é absorvido (a amortização regular quita o saldo).
     TR real informada para o mês substitui a TR projetada (fin["tr_projetada"], mensal em %).
 
     Amortizações extraordinárias são abatidas do saldo logo após a prestação vencida na data do
     pagamento extra (ou antes da 1ª, se anteriores a ela):
-      modo "parcela": mantém o nº de prestações restantes → as próximas prestações diminuem;
+      modo "parcela": mantém o nº de prestações restantes → amortização recalculada, prestações menores;
       modo "prazo":   mantém a amortização mensal → o nº de prestações restantes diminui.
     """
     tr_reais = tr_reais or {}
     i_m = taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"])
     n = int(fin["prazo_meses"])
     inicio = datetime.strptime(fin["data_primeira_parcela"], "%Y-%m-%d").date()
-    saldo = float(fin["valor_financiado"])
-    seguro = float(fin["seguro_mensal"] or 0)
-    adm = float(fin["taxa_adm_mensal"] or 0)
+    saldo = r2(fin["valor_financiado"])
+    modo_seguro = fin.get("seguro_modo") or "fixo"
+    seguro_fixo = r2(fin.get("seguro_mensal") or 0)
+    dfi = r2(fin.get("dfi_mensal") or 0)
+    faixas = mip_faixas_de(fin)
+    adm = r2(fin.get("taxa_adm_mensal") or 0)
     extras = sorted(amortizacoes or [], key=lambda a: (a["data"], a.get("id") or 0))
     restantes = n
-    amort_ref = saldo / n
+    amort_regular = r2(saldo / n)
+
+    def taxa_mip(k: int) -> float:
+        t = 0.0
+        for f in faixas:
+            if k >= f["parcela"]:
+                t = f["taxa_pct"]
+        return t / 100
 
     def aplicar_extras(ate_data: Optional[str], desde_data: Optional[str]):
         """Abate extras com desde_data <= data < ate_data. Retorna o total abatido."""
-        nonlocal saldo, restantes
+        nonlocal saldo, restantes, amort_regular
         total = 0.0
         for a in extras:
             if (desde_data is None or a["data"] >= desde_data) and (ate_data is None or a["data"] < ate_data):
                 if saldo <= 0.005:
                     break
-                valor = min(float(a["valor"]), saldo)
-                saldo -= valor
+                valor = min(r2(a["valor"]), saldo)
+                saldo = r2(saldo - valor)
                 total += valor
-                if a["modo"] == "prazo" and saldo > 0.005 and amort_ref > 0:
-                    restantes = max(1, min(restantes, math.ceil(saldo / amort_ref - 1e-9)))
-        return total
+                if saldo > 0.005:
+                    if a["modo"] == "prazo" and amort_regular > 0:
+                        restantes = max(1, min(restantes, math.ceil(saldo / amort_regular - 1e-9)))
+                    elif restantes > 0:
+                        amort_regular = r2(saldo / restantes)
+        return r2(total)
 
     linhas = []
     # Extras pagos antes da 1ª prestação
@@ -714,14 +774,29 @@ def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None, amortizacoes: Op
         real = (d.year, d.month) in tr_reais
         tr = tr_reais[(d.year, d.month)] if real else float(fin["tr_projetada"] or 0)
         saldo_ini = saldo
-        correcao = saldo * tr / 100
-        saldo_corr = saldo + correcao
-        amort = saldo_corr / restantes
-        juros = saldo_corr * i_m
-        prestacao = amort + juros + seguro + adm
-        saldo = saldo_corr - amort
+        correcao = r2(saldo * tr / 100)
+        saldo_corr = r2(saldo + correcao)
+        if k > 1 and tr:
+            amort_regular = r2(amort_regular * (1 + tr / 100))
+        elif k == 1 and tr:
+            amort_regular = r2(saldo_corr / restantes)
+        # Última parcela (ou amortização maior que o saldo): quita o saldo; resíduo de arredondamento
+        # de até 1 centavo por parcela é absorvido mantendo a amortização regular, como a Caixa faz.
+        if restantes == 1 or amort_regular >= saldo_corr:
+            residuo_ok = abs(amort_regular - saldo_corr) <= 0.01 * n
+            amort = amort_regular if residuo_ok and amort_regular >= saldo_corr else saldo_corr
+        else:
+            amort = amort_regular
+        juros = r2(saldo_corr * i_m)
+        saldo = r2(max(saldo_corr - amort, 0.0))
+        if modo_seguro == "faixas":
+            mip = r2(saldo * taxa_mip(k)) if saldo > 0.005 else 0.0
+            dfi_k = dfi if saldo > 0.005 else 0.0
+        else:
+            mip, dfi_k = seguro_fixo, 0.0
+        seguro = r2(mip + dfi_k)
+        prestacao = r2(amort + juros + seguro + adm)
         restantes -= 1
-        amort_ref = amort
         extra = aplicar_extras(d_prox.isoformat(), d.isoformat())
         linhas.append({
             "n": k,
@@ -730,16 +805,19 @@ def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None, amortizacoes: Op
             "mes": d.month,
             "tr_pct": round(tr, 6),
             "tr_real": real,
-            "saldo_inicial": round(saldo_ini, 2),
-            "correcao_tr": round(correcao, 2),
-            "amortizacao": round(amort, 2),
-            "juros": round(juros, 2),
-            "seguro": round(seguro, 2),
-            "taxa_adm": round(adm, 2),
-            "prestacao": round(prestacao, 2),
-            "amortizacao_extra": round(extra, 2),
-            "amortizacao_extra_antes": round(extra_inicial, 2) if k == 1 else 0.0,
-            "saldo_devedor": round(max(saldo, 0.0), 2),
+            "saldo_inicial": r2(saldo_ini),
+            "correcao_tr": correcao,
+            "amortizacao": r2(amort),
+            "juros": juros,
+            "mip": mip if modo_seguro == "faixas" else None,
+            "dfi": dfi_k if modo_seguro == "faixas" else None,
+            "seguro": seguro,
+            "taxa_adm": adm,
+            "prestacao_aj": r2(amort + juros),
+            "prestacao": prestacao,
+            "amortizacao_extra": extra,
+            "amortizacao_extra_antes": extra_inicial if k == 1 else 0.0,
+            "saldo_devedor": saldo,
             "restantes": restantes if saldo > 0.005 else 0,
         })
     return linhas
@@ -758,12 +836,15 @@ def resumo_financiamento(fin: dict, cronograma: List[dict], hoje: Optional[date]
     futuras = [l for l in cronograma if l["data"] > hoje.isoformat()]
     i_m = taxa_mensal(fin["taxa_juros_anual"], fin["tipo_taxa"])
 
-    # Diagnóstico: no SAC/TR a prestação só sobe se a TR mensal superar i ÷ (1 + i × restantes)
+    # Diagnóstico: no SAC/TR a amortização + juros só sobe se a TR mensal superar i ÷ (1 + i × restantes).
+    # Olha só amortização + juros: subidas de seguro (mudança de faixa do MIP) são esperadas e não vêm da TR.
     sobe = None
     for a, b in zip(cronograma, cronograma[1:]):
-        if a["amortizacao_extra"] == 0 and b["prestacao"] > a["prestacao"] + 0.005:
-            sobe = {"de_n": a["n"], "para_n": b["n"], "de": a["prestacao"], "para": b["prestacao"],
-                    "tr_pct": b["tr_pct"]}
+        aj_a = a.get("prestacao_aj", a["amortizacao"] + a["juros"])
+        aj_b = b.get("prestacao_aj", b["amortizacao"] + b["juros"])
+        if a["amortizacao_extra"] == 0 and b["tr_pct"] > 0 and aj_b > aj_a + 0.005:
+            sobe = {"de_n": a["n"], "para_n": b["n"], "de": a["prestacao"],
+                    "para": b["prestacao"], "tr_pct": b["tr_pct"]}
             break
     limite = i_m / (1 + i_m * int(fin["prazo_meses"])) * 100
 
@@ -815,6 +896,17 @@ def _validar_financiamento(payload: FinanciamentoInput) -> dict:
     dados = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
     dados["nome"] = nome
     dados["tr_projetada"] = tr_anual_para_mensal(payload.tr_projetada_anual)
+    if payload.seguro_modo == "faixas":
+        faixas = sorted({f.parcela: f.taxa_pct for f in payload.mip_faixas}.items())
+        if not faixas:
+            raise HTTPException(status_code=400, detail="Informe ao menos uma faixa de MIP (parcela inicial e taxa).")
+        if faixas[0][0] != 1:
+            raise HTTPException(status_code=400, detail="A primeira faixa de MIP deve começar na parcela 1.")
+        dados["mip_faixas"] = json.dumps([{"parcela": p, "taxa_pct": t} for p, t in faixas])
+        dados["seguro_mensal"] = 0.0
+    else:
+        dados["mip_faixas"] = "[]"
+        dados["dfi_mensal"] = 0.0
     return dados
 
 
@@ -1737,13 +1829,13 @@ def criar_financiamento(payload: FinanciamentoInput):
             """
             INSERT INTO financiamentos (nome, sistema, indexador, valor_financiado, taxa_juros_anual, tipo_taxa,
                 prazo_meses, data_primeira_parcela, tr_projetada, seguro_mensal, taxa_adm_mensal, categoria,
-                forma_pgto, lancar_a_partir_de, recorrencia_id, criado_em)
-            VALUES (?, 'SAC', 'TR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                forma_pgto, lancar_a_partir_de, recorrencia_id, criado_em, seguro_modo, dfi_mensal, mip_faixas)
+            VALUES (?, 'SAC', 'TR', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (fin["nome"], fin["valor_financiado"], fin["taxa_juros_anual"], fin["tipo_taxa"], fin["prazo_meses"],
              fin["data_primeira_parcela"], fin["tr_projetada"], fin["seguro_mensal"], fin["taxa_adm_mensal"],
              fin["categoria"], fin["forma_pgto"], a_partir, fin["recorrencia_id"],
-             datetime.now().isoformat(timespec="seconds")),
+             datetime.now().isoformat(timespec="seconds"), fin["seguro_modo"], fin["dfi_mensal"], fin["mip_faixas"]),
         )
         fin["id"] = cur.lastrowid
         cur.execute(
@@ -1765,6 +1857,7 @@ def criar_financiamento(payload: FinanciamentoInput):
 
 def _com_tr_anual(fin: dict) -> dict:
     fin["tr_projetada_anual"] = round(tr_mensal_para_anual(float(fin["tr_projetada"] or 0)), 4)
+    fin["mip_faixas_lista"] = mip_faixas_de(fin)
     return fin
 
 
@@ -1933,7 +2026,8 @@ def atualizar_financiamento(fin_id: int, payload: FinanciamentoInput):
     conn = get_db_connection()
     fin = _obter_financiamento(conn, fin_id)
     campos = ["nome", "valor_financiado", "taxa_juros_anual", "tipo_taxa", "prazo_meses", "data_primeira_parcela",
-              "tr_projetada", "seguro_mensal", "taxa_adm_mensal", "categoria", "forma_pgto"]
+              "tr_projetada", "seguro_mensal", "taxa_adm_mensal", "categoria", "forma_pgto",
+              "seguro_modo", "dfi_mensal", "mip_faixas"]
     for c in campos:
         fin[c] = dados[c]
     conn.execute(

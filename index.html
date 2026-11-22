@@ -532,8 +532,27 @@
                         <div id="finTRHint" class="text-[11px] text-slate-500 mt-0.5">= 0% ao mês • bancos projetam com TR 0</div>
                     </div>
                     <div>
+                        <label class="block text-xs text-slate-400 mb-1">Seguros (MIP + DFI)</label>
+                        <select id="finSeguroModo" onchange="atualizarCamposSeguroFin()" class="w-full rounded px-3 py-1.5 text-sm">
+                            <option value="fixo">Valor fixo por mês</option>
+                            <option value="faixas">MIP % do saldo por faixa + DFI (Caixa)</option>
+                        </select>
+                    </div>
+                    <div id="boxSeguroFixo">
                         <label class="block text-xs text-slate-400 mb-1">Seguros MIP+DFI (R$/mês)</label>
                         <input type="number" id="finSeguro" min="0" step="0.01" value="0" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div id="boxSeguroDfi" class="hidden">
+                        <label class="block text-xs text-slate-400 mb-1" title="Seguro de danos físicos ao imóvel — valor fixo mensal (coluna DFI/DFC da planilha)">DFI (R$/mês)</label>
+                        <input type="number" id="finDfi" min="0" step="0.01" value="0" class="w-full rounded px-3 py-1.5 text-sm font-mono">
+                    </div>
+                    <div id="boxSeguroFaixas" class="hidden sm:col-span-2 lg:col-span-6 border border-slate-800 rounded-lg p-3 space-y-2">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                            <span class="text-xs text-slate-300 font-semibold">Faixas do MIP <span class="font-normal text-slate-500">— taxa % aplicada sobre o saldo devedor após cada parcela; muda com a faixa de idade (normalmente a cada 5 anos)</span></span>
+                            <button type="button" onclick="adicionarFaixaMip()" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700">＋ Faixa</button>
+                        </div>
+                        <div id="listaFaixasMip" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2"></div>
+                        <p class="text-[11px] text-slate-500">Como achar na planilha: taxa = MIP ÷ saldo devedor da mesma linha × 100. Uma nova faixa começa na parcela em que essa taxa muda.</p>
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Taxa de adm. (R$/mês)</label>
@@ -3204,7 +3223,10 @@
                 prazo_meses: parseInt(document.getElementById('finPrazo').value, 10),
                 data_primeira_parcela: document.getElementById('finData').value,
                 tr_projetada_anual: parseFloat(document.getElementById('finTR').value || 0),
+                seguro_modo: document.getElementById('finSeguroModo').value,
                 seguro_mensal: parseFloat(document.getElementById('finSeguro').value || 0),
+                dfi_mensal: parseFloat(document.getElementById('finDfi').value || 0),
+                mip_faixas: lerFaixasMip(),
                 taxa_adm_mensal: parseFloat(document.getElementById('finAdm').value || 0),
                 categoria: document.getElementById('finCategoria').value,
                 forma_pgto: document.getElementById('finFormaPgto').value,
@@ -3277,6 +3299,45 @@
             box.classList.remove('hidden');
         }
 
+        // ---------- Seguros do financiamento ----------
+        function atualizarCamposSeguroFin() {
+            const faixas = document.getElementById('finSeguroModo').value === 'faixas';
+            document.getElementById('boxSeguroFixo').classList.toggle('hidden', faixas);
+            document.getElementById('boxSeguroDfi').classList.toggle('hidden', !faixas);
+            document.getElementById('boxSeguroFaixas').classList.toggle('hidden', !faixas);
+            if (faixas && !document.querySelector('#listaFaixasMip [data-faixa]')) renderizarFaixasMip([{ parcela: 1, taxa_pct: '' }]);
+        }
+
+        function renderizarFaixasMip(faixas) {
+            document.getElementById('listaFaixasMip').innerHTML = faixas.map((f, i) => `
+                <div data-faixa class="flex flex-col gap-1 p-2 rounded bg-slate-800/50 border border-slate-700">
+                    <div class="flex items-center justify-between text-[10px] text-slate-400"><span>Faixa ${i + 1}</span>
+                        ${i > 0 ? `<button type="button" onclick="this.closest('[data-faixa]').remove(); renumerarFaixasMip()" class="hover:text-rose-400" title="Remover">✕</button>` : ''}</div>
+                    <label class="text-[10px] text-slate-500">a partir da parcela</label>
+                    <input type="number" min="1" step="1" value="${f.parcela}" ${i === 0 ? 'readonly' : ''} class="faixa-parcela w-full rounded px-2 py-1 text-xs font-mono">
+                    <label class="text-[10px] text-slate-500">taxa (% do saldo)</label>
+                    <input type="number" min="0" step="0.0001" value="${f.taxa_pct}" placeholder="0.0108" class="faixa-taxa w-full rounded px-2 py-1 text-xs font-mono">
+                </div>`).join('');
+        }
+
+        function renumerarFaixasMip() {
+            renderizarFaixasMip(lerFaixasMip(true));
+        }
+
+        function adicionarFaixaMip() {
+            const atuais = lerFaixasMip(true);
+            const ultima = atuais[atuais.length - 1];
+            atuais.push({ parcela: ultima ? (parseInt(ultima.parcela, 10) || 1) + 60 : 1, taxa_pct: '' });
+            renderizarFaixasMip(atuais);
+        }
+
+        function lerFaixasMip(manterVazias = false) {
+            return [...document.querySelectorAll('#listaFaixasMip [data-faixa]')].map(el => ({
+                parcela: parseInt(el.querySelector('.faixa-parcela').value, 10),
+                taxa_pct: manterVazias ? el.querySelector('.faixa-taxa').value : parseFloat(el.querySelector('.faixa-taxa').value)
+            })).filter(f => manterVazias || (f.parcela >= 1 && !isNaN(f.taxa_pct)));
+        }
+
         function editarFinanciamento(id) {
             const f = financiamentosCache.find(x => x.id === id);
             if (!f) return;
@@ -3289,6 +3350,10 @@
             document.getElementById('finData').value = f.data_primeira_parcela;
             document.getElementById('finTR').value = Number(f.tr_projetada_anual.toFixed(4));
             document.getElementById('finSeguro').value = f.seguro_mensal;
+            document.getElementById('finSeguroModo').value = f.seguro_modo || 'fixo';
+            document.getElementById('finDfi').value = f.dfi_mensal || 0;
+            renderizarFaixasMip(f.mip_faixas_lista || []);
+            atualizarCamposSeguroFin();
             document.getElementById('finAdm').value = f.taxa_adm_mensal;
             document.getElementById('finCategoria').value = f.categoria;
             document.getElementById('finFormaPgto').value = f.forma_pgto;
@@ -3306,6 +3371,8 @@
 
         function cancelarEdicaoFinanciamento() {
             document.getElementById('formFinanciamento').reset();
+            document.getElementById('listaFaixasMip').innerHTML = '';
+            atualizarCamposSeguroFin();
             document.getElementById('finEditId').value = '';
             const aPartir = document.getElementById('finAPartir');
             aPartir.disabled = false; aPartir.title = '';
@@ -3336,6 +3403,8 @@
             if (!res.ok) { alert('Erro ao cadastrar: ' + msgErro(await res.json().catch(() => ({})))); return; }
             const out = await res.json();
             document.getElementById('formFinanciamento').reset();
+            document.getElementById('listaFaixasMip').innerHTML = '';
+            atualizarCamposSeguroFin();
             atualizarHintTR();
             document.getElementById('simulacaoFinanciamento').classList.add('hidden');
             popularCategoriasFinanciamento();
@@ -3390,7 +3459,7 @@
                             <label>TR projetada (% a.a.):</label>
                             <input type="number" step="0.0001" min="-5" max="20" value="${Number(f.tr_projetada_anual.toFixed(4))}" onchange="alterarTRProjetada(${f.id}, this.value)" class="w-24 rounded px-2 py-1 text-xs font-mono">
                             <span class="text-slate-500">= ${fmtPct(r.tr_projetada_mensal_pct)} a.m.</span>
-                            <span class="text-slate-500">• Seg.+Adm. ${fmtBRL(f.seguro_mensal + f.taxa_adm_mensal)}/mês • ${escHtml(f.categoria)}</span>
+                            <span class="text-slate-500">• ${f.seguro_modo === 'faixas' ? `MIP por faixa (${(f.mip_faixas_lista || []).length}) + DFI ${fmtBRL(f.dfi_mensal)} + adm. ${fmtBRL(f.taxa_adm_mensal)}` : `Seg.+Adm. ${fmtBRL(f.seguro_mensal + f.taxa_adm_mensal)}/mês`} • ${escHtml(f.categoria)}</span>
                         </div>
                     </div>`;
                 }).join('');
@@ -3448,7 +3517,7 @@
                     <td class="font-mono">${fmtNum(l.correcao_tr)}</td>
                     <td class="font-mono">${fmtNum(l.amortizacao)}</td>
                     <td class="font-mono text-amber-300/90">${fmtNum(l.juros)}</td>
-                    <td class="font-mono">${fmtNum(l.seguro + l.taxa_adm)}</td>
+                    <td class="font-mono" title="${l.mip != null ? `MIP ${fmtBRL(l.mip)} + DFI ${fmtBRL(l.dfi)} + adm. ${fmtBRL(l.taxa_adm)}` : `Seguros ${fmtBRL(l.seguro)} + adm. ${fmtBRL(l.taxa_adm)}`}">${fmtNum(l.seguro + l.taxa_adm)}</td>
                     <td class="font-mono font-semibold ${passada ? '' : 'text-white'}">${fmtNum(l.prestacao)}</td>
                     <td class="font-mono ${l.amortizacao_extra + l.amortizacao_extra_antes > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-600'}">${l.amortizacao_extra + l.amortizacao_extra_antes > 0 ? fmtNum(l.amortizacao_extra + l.amortizacao_extra_antes) : '—'}</td>
                     <td class="font-mono">${fmtNum(l.saldo_devedor)}</td>
