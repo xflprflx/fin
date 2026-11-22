@@ -58,6 +58,7 @@
             <button type="button" onclick="periodoHoje()" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700" title="Começar no mês atual">Hoje</button>
             <button type="button" onclick="periodoAnoCivil()" class="px-2 py-1 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700" title="Janeiro a Dezembro do ano selecionado">Jan–Dez</button>
             <span id="lblPeriodo" class="text-xs font-mono text-slate-400 ml-1"></span>
+            <button type="button" id="btnRotulos" onclick="alternarRotulos()" class="ml-2 px-2 py-1 rounded text-xs border transition" title="Mostrar/ocultar rótulos de dados nos gráficos">🏷 Rótulos</button>
         </div>
     </header>
 
@@ -1392,7 +1393,89 @@
             }
         }
 
+        // ==========================================
+        // RÓTULOS DE DADOS NOS GRÁFICOS (flag global)
+        // ==========================================
+        const STORAGE_ROTULOS = 'fin.rotulosDados';
+        let mostrarRotulos = (() => { try { return localStorage.getItem(STORAGE_ROTULOS) === '1'; } catch (e) { return false; } })();
+        const fmtCompacto = (v) => new Intl.NumberFormat('pt-BR', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
+
+        function atualizarBotaoRotulos() {
+            const b = document.getElementById('btnRotulos');
+            b.textContent = `🏷 Rótulos: ${mostrarRotulos ? 'ON' : 'OFF'}`;
+            b.className = `ml-2 px-2 py-1 rounded text-xs border transition ${mostrarRotulos
+                ? 'bg-sky-500 text-slate-950 border-sky-400 font-semibold' : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'}`;
+        }
+
+        function alternarRotulos() {
+            mostrarRotulos = !mostrarRotulos;
+            try { localStorage.setItem(STORAGE_ROTULOS, mostrarRotulos ? '1' : '0'); } catch (e) {}
+            atualizarBotaoRotulos();
+            [chartEvolucaoInstance, chartCategoriasInstance, typeof chartFluxoInstance !== 'undefined' ? chartFluxoInstance : null]
+                .forEach(c => { if (c && c.update) c.update(); });
+        }
+
+        // Plugin próprio: escreve os valores sobre barras/pontos e o percentual nas fatias
+        const pluginRotulosDados = {
+            id: 'rotulosDados',
+            beforeLayout(chart) {
+                // espaço extra no topo para os rótulos das barras mais altas
+                if (chart.config.type !== 'doughnut') chart.options.layout.padding = { top: mostrarRotulos ? 18 : 4 };
+            },
+            afterDatasetsDraw(chart) {
+                if (!mostrarRotulos) return;
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.font = '600 10px Inter, system-ui, sans-serif';
+                ctx.textAlign = 'center';
+                chart.data.datasets.forEach((ds, di) => {
+                    const meta = chart.getDatasetMeta(di);
+                    if (meta.hidden || !chart.isDatasetVisible(di)) return;
+                    const tipo = meta.type || chart.config.type;
+                    if (tipo === 'doughnut' || tipo === 'pie') {
+                        const total = ds.data.reduce((a, b) => a + (b || 0), 0);
+                        meta.data.forEach((arc, i) => {
+                            const v = ds.data[i] || 0;
+                            const pct = total ? v / total * 100 : 0;
+                            if (pct < 4) return; // fatias muito finas ficam sem rótulo
+                            const { x, y } = arc.tooltipPosition();
+                            ctx.fillStyle = '#0f172a';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillText(`${pct.toFixed(0)}%`, x, y - 6);
+                            ctx.font = '500 9px Inter, system-ui, sans-serif';
+                            ctx.fillText(fmtCompacto(v), x, y + 6);
+                            ctx.font = '600 10px Inter, system-ui, sans-serif';
+                        });
+                        return;
+                    }
+                    const n = meta.data.length;
+                    // linhas com muitos pontos: rotula a cada passo + o último, para não poluir
+                    const passo = tipo === 'line' && n > 14 ? Math.ceil(n / 10) : 1;
+                    meta.data.forEach((el, i) => {
+                        const v = ds.data[i];
+                        if (v == null || v === 0) return;
+                        if (tipo === 'line' && i % passo !== 0 && i !== n - 1) return;
+                        const negativo = v < 0;
+                        const texto = fmtCompacto(Math.abs(v));
+                        ctx.textBaseline = negativo && tipo !== 'line' ? 'top' : 'bottom';
+                        const y = tipo === 'line' ? el.y - 7 : (negativo ? el.y + 3 : el.y - 3);
+                        if (tipo === 'line') {
+                            // fundo escuro para não se misturar com as barras
+                            const w = ctx.measureText(texto).width + 6;
+                            ctx.fillStyle = 'rgba(15,23,42,0.85)';
+                            ctx.fillRect(el.x - w / 2, y - 12, w, 13);
+                        }
+                        ctx.fillStyle = tipo === 'line' ? (ds.borderColor || '#38bdf8') : '#e2e8f0';
+                        ctx.fillText(texto, el.x, y);
+                    });
+                });
+                ctx.restore();
+            }
+        };
+        if (typeof Chart !== 'undefined' && Chart.register) Chart.register(pluginRotulosDados);
+
         async function initApp() {
+            atualizarBotaoRotulos();
             document.getElementById('inpData').value = new Date().toISOString().split('T')[0];
             atualizarMacrosNovoForm();
             restaurarPeriodoSalvo();
