@@ -620,9 +620,13 @@
                         <div class="lg:col-span-2">
                             <label class="block text-xs text-slate-400 mb-1">O que reduzir *</label>
                             <div class="flex gap-2">
-                                <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 text-sm cursor-pointer"><input type="radio" name="amoModo" value="prazo" checked> Prazo <span class="text-[11px] text-slate-500">(paga menos juros)</span></label>
-                                <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 text-sm cursor-pointer"><input type="radio" name="amoModo" value="parcela"> Parcela</label>
+                                <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 text-sm cursor-pointer"><input type="radio" name="amoModo" value="prazo" checked onchange="atualizarCampoPrazoBanco()"> Prazo <span class="text-[11px] text-slate-500">(paga menos juros)</span></label>
+                                <label class="flex-1 flex items-center gap-2 px-3 py-1.5 rounded border border-slate-700 bg-slate-800/60 text-sm cursor-pointer"><input type="radio" name="amoModo" value="parcela" onchange="atualizarCampoPrazoBanco()"> Parcela</label>
                             </div>
+                        </div>
+                        <div id="boxPrazoBanco">
+                            <label class="block text-xs text-slate-400 mb-1" title="Prazo TOTAL que o banco informou após a amortização (parcelas já pagas + restantes). Deixe vazio para o cálculo automático.">Novo prazo total do banco</label>
+                            <input type="number" id="amoPrazoBanco" min="1" max="600" step="1" placeholder="automático" class="w-full rounded px-3 py-1.5 text-sm font-mono">
                         </div>
                         <div class="lg:col-span-2 flex gap-2 justify-end">
                             <button type="button" id="btnCancelarAmo" onclick="cancelarEdicaoAmortizacao()" class="hidden px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700">Cancelar</button>
@@ -3546,7 +3550,7 @@
                 : 'Pagamentos extras abatem o saldo devedor logo após a prestação do mês.';
             document.getElementById('listaAmortizacoes').innerHTML = f.amortizacoes.map(a => `
                 <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 rounded bg-slate-800/50 text-xs">
-                    <span><span class="font-mono text-slate-300">${fmtData(a.data)}</span> • <strong class="text-emerald-300">${fmtBRL(a.valor)}</strong> • reduz ${a.modo === 'prazo' ? 'prazo' : 'parcela'}</span>
+                    <span><span class="font-mono text-slate-300">${fmtData(a.data)}</span> • <strong class="text-emerald-300">${fmtBRL(a.valor)}</strong> • reduz ${a.modo === 'prazo' ? 'prazo' : 'parcela'}${a.prazo_total ? ` <span class="text-sky-300">(prazo total ${a.prazo_total} informado pelo banco)</span>` : ''}</span>
                     <span class="flex gap-3">
                         <button onclick="editarAmortizacao(${a.id})" class="text-slate-400 hover:text-sky-400" title="Editar amortização">✏️ editar</button>
                         <button onclick="excluirAmortizacao(${a.id})" class="text-slate-400 hover:text-rose-400" title="Desfazer amortização">🗑️ desfazer</button>
@@ -3558,7 +3562,11 @@
             return {
                 data: document.getElementById('amoData').value,
                 valor: parseFloat(document.getElementById('amoValor').value),
-                modo: document.querySelector('input[name="amoModo"]:checked').value
+                modo: document.querySelector('input[name="amoModo"]:checked').value,
+                prazo_total: (() => {
+                    const v = parseInt(document.getElementById('amoPrazoBanco').value, 10);
+                    return document.querySelector('input[name="amoModo"]:checked').value === 'prazo' && v > 0 ? v : null;
+                })()
             };
         }
 
@@ -3593,6 +3601,8 @@
             document.getElementById('amoData').value = a.data;
             document.getElementById('amoValor').value = a.valor;
             document.querySelector(`input[name="amoModo"][value="${a.modo}"]`).checked = true;
+            document.getElementById('amoPrazoBanco').value = a.prazo_total || '';
+            atualizarCampoPrazoBanco();
             document.getElementById('btnSalvarAmo').textContent = '💾 Salvar alteração';
             document.getElementById('btnCancelarAmo').classList.remove('hidden');
             document.getElementById('btnSimularAmo').classList.add('hidden');
@@ -3600,9 +3610,15 @@
             document.getElementById('formAmortizacao').scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
+        function atualizarCampoPrazoBanco() {
+            const prazo = document.querySelector('input[name="amoModo"]:checked').value === 'prazo';
+            document.getElementById('boxPrazoBanco').classList.toggle('hidden', !prazo);
+        }
+
         function cancelarEdicaoAmortizacao() {
             document.getElementById('amoEditId').value = '';
             document.getElementById('amoValor').value = '';
+            document.getElementById('amoPrazoBanco').value = '';
             document.getElementById('btnSalvarAmo').textContent = '💾 Registrar amortização';
             document.getElementById('btnCancelarAmo').classList.add('hidden');
             document.getElementById('btnSimularAmo').classList.remove('hidden');
@@ -3618,6 +3634,7 @@
             if (!res.ok) { alert('Erro ao registrar: ' + msgErro(await res.json().catch(() => ({})))); return; }
             const efeito = await res.json();
             document.getElementById('amoValor').value = '';
+            document.getElementById('amoPrazoBanco').value = '';
             await reloadAll();
             const box = document.getElementById('resultadoAmortizacao');
             box.innerHTML = efeitoAmortizacaoHtml(efeito, true);

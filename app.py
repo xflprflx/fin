@@ -226,6 +226,11 @@ def init_db():
             cur.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {ddl}")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_lanc_recorrencia ON lancamentos(recorrencia_id)")
 
+    # Migração: prazo informado pelo banco na amortização extraordinária
+    colunas_amo = {r[1] for r in cur.execute("PRAGMA table_info(financiamento_amortizacoes)").fetchall()}
+    if colunas_amo and "prazo_total" not in colunas_amo:
+        cur.execute("ALTER TABLE financiamento_amortizacoes ADD COLUMN prazo_total INTEGER")
+
     # Migração: seguros por faixa no financiamento
     colunas_fin = {r[1] for r in cur.execute("PRAGMA table_info(financiamentos)").fetchall()}
     for col, ddl in (("seguro_modo", "TEXT NOT NULL DEFAULT 'fixo'"), ("dfi_mensal", "REAL NOT NULL DEFAULT 0.0"),
@@ -456,6 +461,11 @@ class AmortizacaoInput(BaseModel):
     data: str = Field(..., description="YYYY-MM-DD do pagamento extra")
     valor: float = Field(..., gt=0)
     modo: str = Field(..., pattern="^(prazo|parcela)$", description="prazo = reduz prazo; parcela = reduz prestação")
+    prazo_total: Optional[int] = Field(
+        default=None, ge=1, le=600,
+        description="Modo prazo: novo prazo TOTAL informado pelo banco (parcelas já pagas + restantes). "
+                    "Vazio = cálculo automático (mantém a amortização mensal).",
+    )
 
 
 class PagamentoFaturaInput(BaseModel):
@@ -744,8 +754,8 @@ def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None, amortizacoes: Op
                 t = f["taxa_pct"]
         return t / 100
 
-    def aplicar_extras(ate_data: Optional[str], desde_data: Optional[str]):
-        """Abate extras com desde_data <= data < ate_data. Retorna o total abatido."""
+    def aplicar_extras(ate_data: Optional[str], desde_data: Optional[str], pagas: int = 0):
+        """Abate extras com desde_data <= data < ate_data (após `pagas` prestações). Retorna o total abatido."""
         nonlocal saldo, restantes, amort_regular
         total = 0.0
         for a in extras:
@@ -756,7 +766,11 @@ def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None, amortizacoes: Op
                 saldo = r2(saldo - valor)
                 total += valor
                 if saldo > 0.005:
-                    if a["modo"] == "prazo" and amort_regular > 0:
+                    if a["modo"] == "prazo" and a.get("prazo_total"):
+                        # prazo informado pelo banco: amortização = saldo ÷ prazo restante
+                        restantes = max(1, int(a["prazo_total"]) - pagas)
+                        amort_regular = r2(saldo / restantes)
+                    elif a["modo"] == "prazo" and amort_regular > 0:
                         restantes = max(1, min(restantes, math.ceil(saldo / amort_regular - 1e-9)))
                     elif restantes > 0:
                         amort_regular = r2(saldo / restantes)
@@ -797,7 +811,7 @@ def calcular_sac_tr(fin: dict, tr_reais: Optional[dict] = None, amortizacoes: Op
         seguro = r2(mip + dfi_k)
         prestacao = r2(amort + juros + seguro + adm)
         restantes -= 1
-        extra = aplicar_extras(d_prox.isoformat(), d.isoformat())
+        extra = aplicar_extras(d_prox.isoformat(), d.isoformat(), k)
         linhas.append({
             "n": k,
             "data": d.isoformat(),
@@ -1413,9 +1427,9 @@ def atualizar_lancamento(lanc_id: int, payload: LancamentoUpdateInput):
         amort = conn.execute("SELECT * FROM financiamento_amortizacoes WHERE id = ?", (lanc["amortizacao_id"],)).fetchone()
         outras = [a for a in _amortizacoes(conn, fin["id"]) if a["id"] != lanc["amortizacao_id"]]
         base = _cronograma(conn, fin, outras)
-        entrada = AmortizacaoInput(data=payload.data, valor=valor, modo=amort["modo"])
+        entrada = AmortizacaoInput(data=payload.data, valor=valor, modo=amort["modo"], prazo_total=amort["prazo_total"])
         _validar_amortizacao(conn, fin, entrada, base)
-        _gravar_amortizacao(conn, fin, amort["id"], payload.data, valor, amort["modo"])
+        _gravar_amortizacao(conn, fin, amort["id"], payload.data, valor, amort["modo"], amort["prazo_total"])
         conn.execute("UPDATE lancamentos SET categoria = ?, descricao = ?, forma_pgto = ? WHERE id = ?",
                      (payload.categoria, descricao, payload.forma_pgto, lanc_id))
         _sincronizar_lancamentos_financiamento(conn, fin)
@@ -1948,6 +1962,16 @@ def _validar_amortizacao(conn, fin: dict, payload: AmortizacaoInput, base: List[
         conn.close()
         raise HTTPException(status_code=400,
                             detail=f"O valor ultrapassa o saldo devedor nessa data (R$ {fmt_brl(saldo)}).")
+    if payload.prazo_total is not None:
+        if payload.modo != "prazo":
+            conn.close()
+            raise HTTPException(status_code=400, detail="O novo prazo só se aplica à amortização que reduz o prazo.")
+        pagas = len(anteriores)
+        if not pagas < payload.prazo_total <= len(base):
+            conn.close()
+            raise HTTPException(status_code=400, detail=(
+                f"Novo prazo total deve ficar entre {pagas + 1} e {len(base)} meses "
+                f"({pagas} parcela(s) já vencida(s) até a data e prazo atual de {len(base)})."))
 
 
 @app.post("/api/financiamentos/{fin_id}/amortizacoes/simular")
@@ -1958,7 +1982,8 @@ def simular_amortizacao(fin_id: int, payload: AmortizacaoInput):
     amortizacoes = _amortizacoes(conn, fin_id)
     base = _cronograma(conn, fin, amortizacoes)
     _validar_amortizacao(conn, fin, payload, base)
-    nova = {"id": 10 ** 9, "data": payload.data, "valor": payload.valor, "modo": payload.modo}
+    nova = {"id": 10 ** 9, "data": payload.data, "valor": payload.valor, "modo": payload.modo,
+            "prazo_total": payload.prazo_total}
     com = _cronograma(conn, fin, amortizacoes + [nova])
     conn.close()
     return _comparar_amortizacao(fin, base, com, payload.data)
@@ -1976,8 +2001,10 @@ def registrar_amortizacao(fin_id: int, payload: AmortizacaoInput):
     base = _cronograma(conn, fin, amortizacoes)
     _validar_amortizacao(conn, fin, payload, base)
     cur = conn.execute(
-        "INSERT INTO financiamento_amortizacoes (financiamento_id, data, valor, modo, criado_em) VALUES (?, ?, ?, ?, ?)",
-        (fin_id, payload.data, round(payload.valor, 2), payload.modo, datetime.now().isoformat(timespec="seconds")),
+        """INSERT INTO financiamento_amortizacoes (financiamento_id, data, valor, modo, criado_em, prazo_total)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (fin_id, payload.data, round(payload.valor, 2), payload.modo, datetime.now().isoformat(timespec="seconds"),
+         payload.prazo_total if payload.modo == "prazo" else None),
     )
     amort_id = cur.lastrowid
     d = datetime.strptime(payload.data, "%Y-%m-%d").date()
@@ -2054,7 +2081,7 @@ def atualizar_amortizacao(fin_id: int, amort_id: int, payload: AmortizacaoInput)
     outras = [a for a in _amortizacoes(conn, fin_id) if a["id"] != amort_id]
     base = _cronograma(conn, fin, outras)
     _validar_amortizacao(conn, fin, payload, base)
-    _gravar_amortizacao(conn, fin, amort_id, payload.data, payload.valor, payload.modo)
+    _gravar_amortizacao(conn, fin, amort_id, payload.data, payload.valor, payload.modo, payload.prazo_total)
     cron = _sincronizar_lancamentos_financiamento(conn, fin)
     efeito = _comparar_amortizacao(fin, base, cron, payload.data)
     conn.commit()
@@ -2062,11 +2089,12 @@ def atualizar_amortizacao(fin_id: int, amort_id: int, payload: AmortizacaoInput)
     return {"status": "ok", "id": amort_id, **efeito}
 
 
-def _gravar_amortizacao(conn, fin: dict, amort_id: int, data_str: str, valor: float, modo: str):
+def _gravar_amortizacao(conn, fin: dict, amort_id: int, data_str: str, valor: float, modo: str,
+                        prazo_total: Optional[int] = None):
     """Atualiza a amortização e o lançamento do pagamento extra correspondente."""
     d = datetime.strptime(data_str, "%Y-%m-%d").date()
-    conn.execute("UPDATE financiamento_amortizacoes SET data = ?, valor = ?, modo = ? WHERE id = ?",
-                 (data_str, round(valor, 2), modo, amort_id))
+    conn.execute("UPDATE financiamento_amortizacoes SET data = ?, valor = ?, modo = ?, prazo_total = ? WHERE id = ?",
+                 (data_str, round(valor, 2), modo, prazo_total if modo == "prazo" else None, amort_id))
     conn.execute(
         """UPDATE lancamentos SET data = ?, mes = ?, ano = ?, competencia = ?, valor = ?, observacao = ?
            WHERE amortizacao_id = ?""",
