@@ -84,7 +84,7 @@
                     <div id="kpi-hoje" class="text-2xl font-bold text-sky-300 mt-1">R$ 0,00</div>
                     <div id="kpi-hoje-sub" class="text-xs text-slate-500"></div>
                 </div>
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <div onclick="abrirLancamentosKpiDashboard('Receita')" class="bg-slate-900 border border-slate-800 rounded-xl p-4 cursor-pointer hover:border-emerald-500/50 transition" title="Ver os lançamentos">
                     <span id="kpi-receita-lbl" class="text-xs uppercase text-slate-400 font-semibold">Receita</span>
                     <div id="kpi-receita" class="text-2xl font-bold text-emerald-400 mt-1">R$ 0,00</div>
                     <span id="kpi-receita-sub" class="text-xs text-slate-500"></span>
@@ -94,7 +94,7 @@
                     <div id="kpi-despesa" class="text-2xl font-bold text-rose-400 mt-1">R$ 0,00</div>
                     <span id="kpi-despesa-sub" class="text-xs text-slate-500"></span>
                 </div>
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                <div onclick="abrirLancamentosKpiDashboard(null)" class="bg-slate-900 border border-slate-800 rounded-xl p-4 cursor-pointer hover:border-sky-500/50 transition" title="Ver receitas e despesas">
                     <span id="kpi-saldo-lbl" class="text-xs uppercase text-slate-400 font-semibold">Saldo líquido</span>
                     <div id="kpi-saldo" class="text-2xl font-bold text-sky-400 mt-1">R$ 0,00</div>
                     <span id="kpi-poupado" class="text-xs text-slate-400">0% poupado</span>
@@ -1983,6 +1983,17 @@
             dashMacro = dashMacro === macro ? null : macro;
             aplicarSelecaoDashboard();
             if (dashboardCache) renderizarGraficosDashboard(dashboardCache);
+        }
+
+        // Cards de Receita (tipo = 'Receita') e Saldo (tipo = null: receitas e despesas) do dashboard
+        function abrirLancamentosKpiDashboard(tipo) {
+            const pos = posicaoSelecionadaDashboard();
+            const p = pos ? periodosAtuais[pos - 1] : null;
+            const quando = p ? `${MESES_NOME[p.mes - 1]}/${p.ano}` : `${periodosAtuais[0].label} → ${periodosAtuais[11].label}`;
+            abrirResumoLancamentos({
+                titulo: `${tipo === 'Receita' ? 'Receitas' : 'Receitas e despesas'} — ${quando}`,
+                filtros: { ...(tipo ? { tipo } : {}), ...(p ? { periodo: p.chave } : {}) }
+            });
         }
 
         function abrirLancamentosDespesaDashboard() {
